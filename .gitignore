@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+env/
+.venv/
+*.egg-info/
+
+# PyInstaller output
+dist/
+build/
+*.spec
+
+# PaddleOCR models (too large for git — distribute via Releases)
+inference/
+*.pdparams
+*.pdmodel
+paddle_ocr_models/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets
+.env
+local_config.py
+
+# Logs
+*.log
+logs/
