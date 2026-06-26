@@ -153,11 +153,9 @@ class SelectionWindow(QWidget):
             Qt.WindowStaysOnTopHint |
             Qt.Tool
         )
-        
-        # Usar cursor personalizado de alto contraste
+
         custom_cursor = self._create_glow_cursor()
         self.setCursor(custom_cursor)
-        
         self.setMouseTracking(True)
 
         screen = self._app.primaryScreen()
@@ -165,13 +163,60 @@ class SelectionWindow(QWidget):
         self.setGeometry(geo)
 
         super().show()
-        self.activateWindow()
-        self.raise_()
-        self.setFocus()
+
+        # ── FORZAR FOCO CONTRA JUEGOS ──
+        self._force_foreground()
 
         print("[*] Listo para seleccionar")
         self._loop = QEventLoop()
         self._loop.exec()
+        
+    def _force_foreground(self):
+        """
+        Fuerza esta ventana al frente robando el foco del juego activo.
+        Usa AttachThreadInput para bypassear el ForegroundLockTimeout de Windows.
+        """
+        import ctypes
+        import ctypes.wintypes
+
+        try:
+            hwnd = int(self.winId())
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            # Obtener el HWND del proceso que tiene el foco actualmente (el juego)
+            foreground_hwnd = user32.GetForegroundWindow()
+            current_tid     = kernel32.GetCurrentThreadId()
+            fg_tid          = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+
+            # Adjuntar nuestro thread al del juego para poder robarle el foco
+            attached = False
+            if fg_tid and fg_tid != current_tid:
+                user32.AttachThreadInput(fg_tid, current_tid, True)
+                attached = True
+
+            # Secuencia Win32 para traer la ventana al frente
+            user32.ShowWindow(hwnd, 9)          # SW_RESTORE
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.SetFocus(hwnd)
+
+            if attached:
+                user32.AttachThreadInput(fg_tid, current_tid, False)
+
+            # Captura exclusiva del mouse: todos los eventos van a esta ventana
+            self.grabMouse()
+            self.activateWindow()
+            self.raise_()
+            self.setFocus()
+
+        except Exception as e:
+            print(f"[WARN force_foreground] {e}")
+            # Fallback: intento básico sin Win32
+            self.activateWindow()
+            self.raise_()
+            self.setFocus()
 
     def _capture_screenshot(self):
         screen = QApplication.primaryScreen()
@@ -192,6 +237,8 @@ class SelectionWindow(QWidget):
         print(f"[*] Screenshot capturado: {width}x{height}")
 
     def close(self):
+        # Liberar captura exclusiva del mouse antes de cerrar
+        self.releaseMouse()
         if hasattr(self, '_loop') and self._loop.isRunning():
             self._loop.quit()
         super().close()
