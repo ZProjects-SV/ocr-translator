@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import re
-from deep_translator import GoogleTranslator
 
 from preferences import (
     get_translation_source,
@@ -42,6 +41,7 @@ class Translator:
         print("[CACHE] Cache de traducciones vaciada.")
 
     def translate(self, text: str) -> str:
+        from deep_translator import GoogleTranslator
         """Traduce texto leyendo siempre los valores actuales de preferencias."""
         if not text:
             return ""

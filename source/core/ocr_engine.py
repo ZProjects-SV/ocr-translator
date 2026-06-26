@@ -23,7 +23,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from PIL import ImageGrab, Image, ImageFilter, ImageEnhance
-from paddleocr import PaddleOCR
 
 from config import (
     PADDLE_LANG,
@@ -67,6 +66,7 @@ class OCREngine:
 
     def _init_engine(self, source_lang: str = None) -> None:
         """Inicializa PaddleOCR. Si source_lang es None, lo lee de preferencias."""
+        from paddleocr import PaddleOCR
         try:
             source_lang = source_lang or get_translation_source() or "en"
             paddle_lang = TRANSLATION_TO_PADDLE_LANG.get(source_lang, PADDLE_LANG)

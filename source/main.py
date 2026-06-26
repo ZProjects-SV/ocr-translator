@@ -39,6 +39,7 @@ if sys.platform == "win32":
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QVBoxLayout, QLabel
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QObject, Signal, Qt, QTimer
+from ui.splash_screen import SplashScreen
 
 from config import (
     APP_NAME,
@@ -58,13 +59,14 @@ from core.translator import Translator
 from core.screen_capture import ScreenCapture
 from core.loading_window import UnifiedResultWindow
 from ui.selection_window import SelectionWindow
-from ui.splash_screen import SplashScreen
 from ui.preferences_window import PreferencesWindow
 
 from PIL import Image
 import pystray
 import keyboard
 import ctypes
+import tempfile
+import msvcrt
 
 # Variables globales para texto de hotkeys (usado en tooltips y menús)
 hotkeys = get_capture_hotkeys()
@@ -122,6 +124,41 @@ class _Signals(QObject):
         super().__init__()
         print("[PREF] _Signals inicializado (area_selected, start_capture_s, open_preferences creadas)")
 
+_LOCK_FILE_PATH = os.path.join(tempfile.gettempdir(), "ocr_translator_instance.lock")
+_lock_file_handle = None
+
+def acquire_single_instance_lock() -> bool:
+    """
+    Intenta adquirir un file lock exclusivo.
+    Retorna True si esta es la primera instancia, False si ya hay otra corriendo.
+    """
+    global _lock_file_handle
+    try:
+        _lock_file_handle = open(_LOCK_FILE_PATH, "w")
+        msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_NBLCK, 1)
+        _lock_file_handle.write(str(os.getpid()))
+        _lock_file_handle.flush()
+        return True
+    except (IOError, OSError):
+        # Ya existe una instancia con el lock
+        if _lock_file_handle:
+            _lock_file_handle.close()
+            _lock_file_handle = None
+        return False
+
+def release_single_instance_lock():
+    global _lock_file_handle
+    if _lock_file_handle:
+        try:
+            msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_UNLCK, 1)
+            _lock_file_handle.close()
+        except Exception:
+            pass
+        _lock_file_handle = None
+    try:
+        os.remove(_LOCK_FILE_PATH)
+    except Exception:
+        pass
 
 # ==========================================================
 # BLOQUE: Aplicación Principal (Inicialización y Ejecución)
@@ -162,15 +199,14 @@ class OCRTranslatorApp:
         self._about_window  = None
 
     def run(self):
-        print("[PREF] OCRTranslatorApp.run() iniciado, _prefs_window inicial:", self._prefs_window)
-        self._install_keyboard_hook()
-
+        # Mostrar splash PRIMERO, antes de cualquier otra cosa
         splash = SplashScreen()
         splash.show()
-
-        # Forzar pintado completo antes de lanzar el worker
         self.qt_app.processEvents()
-        self.qt_app.processEvents()  # dos pases para asegurar repintado completo
+        self.qt_app.processEvents()
+
+        # Ahora sí el resto
+        self._install_keyboard_hook()
 
         def _worker():
             try:
@@ -582,5 +618,12 @@ class OCRTranslatorApp:
 
 
 if __name__ == "__main__":
-    app = OCRTranslatorApp()
-    app.run()
+    # Verificar instancia única ANTES de inicializar Qt
+    if not acquire_single_instance_lock():
+        sys.exit(0) 
+
+    try:
+        app = OCRTranslatorApp()
+        app.run()
+    finally:
+        release_single_instance_lock()
