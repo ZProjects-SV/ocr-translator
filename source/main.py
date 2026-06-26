@@ -327,6 +327,9 @@ class OCRTranslatorApp:
         if self.capturing:
             print("[WARN] Ya hay una captura en proceso, ignorando...")
             return
+        if self._prefs_window is not None:
+            print("[WARN] Preferencias abiertas, captura bloqueada.")
+            return
 
         self.capturing = True
         print("[*] Iniciando captura...")
