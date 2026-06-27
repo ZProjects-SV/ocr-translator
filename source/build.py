@@ -1,4 +1,5 @@
 import subprocess, sys, os, importlib.metadata, importlib.util
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 def get_pkg_path(name):
     spec = importlib.util.find_spec(name)

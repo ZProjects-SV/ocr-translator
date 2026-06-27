@@ -19,9 +19,9 @@
 # BLOQUE: Identidad básica de la app
 # ==========================================================
 APP_NAME = "OCR Translator"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_ORGANIZATION = "ZProjects"
-APP_USER_MODEL_ID = "OCRTranslator.App.1.0"
+APP_USER_MODEL_ID = "OCRTranslator.App.1.1.0"
 # (Dependencias/Interacciones: Usado globalmente por 'main.py' y 'preferences.py' para registrar la app en Windows y en QSettings)
 
 
@@ -84,7 +84,7 @@ SELECTION_MIN_HEIGHT    = 10
 # ==========================================================
 ABOUT_TITLE = "OCR Translator"
 ABOUT_TEXT = (
-    "OCR + Traductor v1.0\n\n"
+    "OCR + Traductor v1.1.0\n\n"
     "Captura texto de pantalla y traduce\n"
 )
 

@@ -305,7 +305,7 @@ class SplashScreen(QWidget):
         painter.drawText(
             QRect(0, self.HEIGHT - 22, self.WIDTH, 16),
             Qt.AlignCenter,
-            "v1.0  -  PaddleOCR  -  Google Translate"
+            "v1.1.0  -  PaddleOCR  -  Google Translate"
         )
 
         painter.end()
