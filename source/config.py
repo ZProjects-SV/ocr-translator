@@ -59,6 +59,7 @@ TRANSLATION_LANG_DISPLAY = {
 
 PADDLE_LANG = "en"
 PADDLE_MIN_CONFIDENCE = 0.6
+PADDLE_MIN_CONFIDENCE_PIXEL = 0.35
 # (Dependencias/Interacciones: Usado por 'translator.py', 'ocr_engine.py' y la UI de 'preferences_window.py')
 
 

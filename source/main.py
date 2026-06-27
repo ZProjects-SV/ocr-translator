@@ -35,6 +35,10 @@ if sys.platform == "win32":
 
     subprocess.Popen.__init__ = _silent_popen_init
     
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QVBoxLayout, QLabel
 from PySide6.QtGui import QIcon

@@ -42,17 +42,17 @@ class Translator:
 
     def translate(self, text: str) -> str:
         from deep_translator import GoogleTranslator
-        """Traduce texto leyendo siempre los valores actuales de preferencias."""
         if not text:
             return ""
 
-        # Leer preferencias en cada llamada para reflejar cambios del usuario
-        source       = get_translation_source()
-        target       = get_translation_target()
-        max_chars    = get_translation_max_chars()
+        source        = get_translation_source()
+        target        = get_translation_target()
+        max_chars     = get_translation_max_chars()
         cache_enabled = get_translation_cache_enabled()
-
+        
         text = "\n".join(line for line in text.split("\n") if line.strip())
+
+        #print(f"[TRANSLATE] Texto recibido ({len(text)} chars):\n{'-'*40}\n{text}\n{'-'*40}")
 
         # Crear clave de caché ignorando puntuación básica
         cache_key = f"{source}→{target}::{re.sub(r'[.…,!?]+', '', text.lower().strip())}"
@@ -64,7 +64,6 @@ class Translator:
         try:
             translator = GoogleTranslator(source=source, target=target)
 
-            # Manejo de límite de caracteres de la API de Google
             if len(text) > max_chars:
                 chunks = [
                     text[i : i + max_chars]
@@ -74,11 +73,15 @@ class Translator:
             else:
                 translated = translator.translate(text)
 
+            # ✅ Log del resultado traducido
+            #print(f"[TRANSLATE] Resultado ({source}→{target}):\n{'-'*40}\n{translated}\n{'-'*40}")
+
             if cache_enabled:
                 self._cache[cache_key] = translated
 
             return translated
 
         except Exception as e:
+            print(f"[TRANSLATE ERROR] {e}")
             return f"Error de traducción: {e}"
 # (Dependencias/Interacciones: Depende de 'preferences' en tiempo real y de la librería 'deep_translator'. Es instanciado por 'main.py' y su método 'translate' es llamado en el hilo de procesamiento de la captura.)
