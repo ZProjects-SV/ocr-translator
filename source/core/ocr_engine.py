@@ -16,7 +16,7 @@
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 import os
 import sys
-
+import gc
 
 # Hack de sys.path necesario para que PyInstaller y submódulos encuentren
 # los recursos de PaddleOCR al empaquetar como .exe.
@@ -178,23 +178,18 @@ class OCREngine:
         img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
         h, w = img_cv.shape[:2]
 
-        # 1. Escalar x4 con Nearest Neighbor — preserva los píxeles duros
-        #    NUNCA usar LANCZOS o BILINEAR en pixel art
         scale_factor = 4
         img_cv = cv2.resize(
             img_cv,
             (w * scale_factor, h * scale_factor),
-            interpolation=cv2.INTER_NEAREST  # <-- crítico para pixel fonts
+            interpolation=cv2.INTER_NEAREST
         )
 
-        # 2. Convertir a escala de grises
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        del img_cv 
 
-        # 3. Binarización Otsu — funciona perfecto con bordes duros del pixel art
         _, binary_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # 4. Fallback adaptativo si Otsu produce un resultado extremo
-        #    (fondo no uniforme: gradientes, HUDs con sombras)
         white_ratio = np.sum(binary_otsu == 255) / binary_otsu.size
         if white_ratio < 0.05 or white_ratio > 0.95:
             binary = cv2.adaptiveThreshold(
@@ -206,16 +201,19 @@ class OCREngine:
         else:
             binary = binary_otsu
 
-        # 5. Dilate mínimo SOLO si los píxeles están muy aislados (texto muy pequeño)
-        #    Esto conecta fragmentos rotos sin fusionar letras
-        if h < 30:  # texto muy pequeño en la captura original
+        del gray 
+        del binary_otsu
+
+        if h < 30:
             kernel = np.ones((2, 2), np.uint8)
             binary = cv2.dilate(binary, kernel, iterations=1)
 
-        # 6. Reconvertir a PIL RGB para PaddleOCR
         result = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
+        del binary
+        out = Image.fromarray(result)
+        del result  
         print(f"[INFO] Preprocesamiento pixel-font aplicado (escala x{scale_factor}, Nearest Neighbor)")
-        return Image.fromarray(result)
+        return out
 
 
     def _preprocess_standard(self, image: Image.Image) -> Image.Image:
@@ -225,37 +223,35 @@ class OCREngine:
         - CLAHE adaptativo por zona en lugar de contraste fijo global
         - Denoise ligero para eliminar artefactos de compresión de pantalla
         """
-        if image.width < 400 or image.height < 400:
-            image = image.resize(
-                (image.width * 2, image.height * 2),
-                Image.Resampling.LANCZOS
-            )
-
         img_cv = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2BGR)
 
-        # Denoise ligero en imágenes pequeñas — elimina artefactos JPEG/compresión
-        # sin borrar el texto. Solo aplicar en capturas pequeñas para evitar lentitud.
         if image.width < 600:
-            img_cv = cv2.fastNlMeansDenoisingColored(
-                img_cv, None,
-                h=3, hColor=3,
-                templateWindowSize=7,
-                searchWindowSize=21,
-            )
+            denoised = cv2.fastNlMeansDenoisingColored(img_cv, None,
+                h=3, hColor=3, templateWindowSize=7, searchWindowSize=21)
+            del img_cv
+            img_cv = denoised
 
-        # CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        # Ajusta el contraste por zona en lugar de globalmente,
-        # ideal para HUDs con fondos variables (oscuro en un lado, claro en otro).
         lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
+        del img_cv
+
         l, a, b = cv2.split(lab)
+        del lab
+
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         l = clahe.apply(l)
-        lab = cv2.merge((l, a, b))
-        img_cv = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-        image = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
-        image = image.filter(ImageFilter.SHARPEN)
-        return image
+        lab_merged = cv2.merge((l, a, b))
+        del l, a, b
+
+        img_cv = cv2.cvtColor(lab_merged, cv2.COLOR_LAB2BGR)
+        del lab_merged
+
+        rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+        del img_cv
+
+        out = Image.fromarray(rgb).filter(ImageFilter.SHARPEN)
+        del rgb
+        return out
 # (Dependencias/Interacciones: Usa PIL y OpenCV. _preprocess delega automáticamente según el tipo de fuente detectado.)
 
 
@@ -277,6 +273,8 @@ class OCREngine:
             image = self._preprocess(image)
             img_array = np.array(image.convert("RGB"))
             result = self._engine.ocr(img_array, cls=False)
+            del img_array
+            del image 
 
             if not result or not result[0]:
                 return ""
@@ -291,6 +289,8 @@ class OCREngine:
         except Exception as e:
             print(f"[ERROR] Error en OCR: {str(e)}")
             raise RuntimeError(f"Error en OCR: {str(e)}")
+        finally:
+            gc.collect()
 
 
     def extract_text_with_boxes(self, image: Image.Image):
@@ -329,6 +329,8 @@ class OCREngine:
 
             img_array = np.array(processed.convert("RGB"))
             result = self._engine.ocr(img_array, cls=False)
+            del img_array
+            del processed
 
             if not result or not result[0]:
                 return "", []
@@ -362,6 +364,9 @@ class OCREngine:
         except Exception as e:
             print(f"[ERROR] extract_text_with_boxes: {e}")
             raise RuntimeError(f"Error en OCR: {e}")
+        finally:
+            import gc
+            gc.collect()
 
 
     def process_area(self, x1, y1, x2, y2, lang: str = None) -> str:

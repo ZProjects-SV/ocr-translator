@@ -65,6 +65,8 @@ from core.loading_window import UnifiedResultWindow
 from ui.selection_window import SelectionWindow
 from ui.preferences_window import PreferencesWindow
 
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image
 import pystray
 import keyboard
@@ -201,12 +203,12 @@ class OCRTranslatorApp:
         self._active_result = None
         self._prefs_window  = None
         self._about_window  = None
+        self._ocr_executor  = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr_worker")
 
     def run(self):
         # Mostrar splash PRIMERO, antes de cualquier otra cosa
         splash = SplashScreen()
         splash.show()
-        self.qt_app.processEvents()
         self.qt_app.processEvents()
 
         # Ahora sí el resto
@@ -245,12 +247,20 @@ class OCRTranslatorApp:
         if not models_exist:
             splash.set_download_mode()
             splash.set_status("Descargando modelos... (primera vez)", 0.10)
-            with ProgressCapture(splash, "Descargando", 0.10, 0.70):
-                self.ocr_engine = OCREngine()
+            try:
+                with ProgressCapture(splash, "Descargando", 0.10, 0.70):
+                    self.ocr_engine = OCREngine()
+            except Exception:
+                sys.stderr = sys.__stderr__  # Reset de emergencia si falla OCREngine
+                raise
         else:
             splash.set_status("Cargando motor OCR...", 0.20)
-            with ProgressCapture(splash, "Cargando", 0.20, 0.60):
-                self.ocr_engine = OCREngine()
+            try:
+                with ProgressCapture(splash, "Cargando", 0.20, 0.60):
+                    self.ocr_engine = OCREngine()
+            except Exception:
+                sys.stderr = sys.__stderr__  # Reset de emergencia si falla OCREngine
+                raise
 
         splash.set_status("Calentando modelo...", 0.75)
         self._warmup_ocr()
@@ -268,7 +278,7 @@ class OCRTranslatorApp:
         print("[*] Presiona ", hotkey_text, " para capturar y traducir")
         print("=" * 60)
 
-        threading.Thread(target=self._run_tray, daemon=False).start()
+        threading.Thread(target=self._run_tray, daemon=True).start()
         splash.close()
 
     def _run_tray(self):
@@ -360,20 +370,20 @@ class OCRTranslatorApp:
         )
 
     def _run_result_window(self, x1, y1, x2, y2, cropped_image):
-        # Si ya hay una ventana activa, cerrarla antes de abrir nueva
         if self._active_result and not self._active_result.is_closed:
             self._active_result.close()
+            self._active_result = None
 
-        # MARGEN_EXTERNO: El que le sumamos en SelectionWindow para no cortar el borde
-        MARGEN_EXTERNO = 1 
-        result_window = UnifiedResultWindow(x1, y1, x2, y2, margin=MARGEN_EXTERNO)  
+        MARGEN_EXTERNO = 1
+        result_window = UnifiedResultWindow(x1, y1, x2, y2, margin=MARGEN_EXTERNO)
         self._active_result = result_window
         result_window.show_loading()
 
         def process():
+            _img = cropped_image
             try:
                 result_window.update_status("Extrayendo texto...")
-                original_text, blocks = self.ocr_engine.extract_text_with_boxes(cropped_image)
+                original_text, blocks = self.ocr_engine.extract_text_with_boxes(_img)
 
                 if not original_text:
                     print("[DEBUG] No hay texto, cerrando...")
@@ -392,15 +402,19 @@ class OCRTranslatorApp:
                     print("[OK] Traducción completada")
                 except UnicodeEncodeError:
                     print("[OK] Traduccion completada")
-                
-                result_window.show_result(translated_text, cropped_image, blocks)
+
+                result_window.show_result(translated_text, _img, blocks)
 
             except Exception as e:
                 print(f"[ERROR] {type(e).__name__}: {e}")
                 result_window.close_after(3000)
+            finally:
+                _img = None
+                if self._active_result is result_window:
+                    self._active_result = None
 
         self.capturing = False
-        threading.Thread(target=process, daemon=True).start()
+        self._ocr_executor.submit(process)  # Serializa capturas, máx 1 thread OCR activo
         result_window.run()
 
     # ==========================================================
@@ -502,7 +516,7 @@ class OCRTranslatorApp:
 
         dlg = QDialog()
         dlg.setWindowTitle(ABOUT_TITLE)
-        dlg.setAttribute(Qt.WA_DeleteOnClose, False)
+        dlg.setAttribute(Qt.WA_DeleteOnClose, True)
         dlg.setWindowFlags(Qt.Window)
         dlg.setMinimumWidth(320)
 
@@ -511,15 +525,7 @@ class OCRTranslatorApp:
         label.setWordWrap(True)
         layout.addWidget(label)
 
-        def _do_close():
-            dlg.hide()
-            self._about_window = None
-
-        def _on_close_event_patch(event):
-            event.ignore()
-            QTimer.singleShot(0, _do_close)
-
-        dlg.closeEvent = _on_close_event_patch
+        dlg.destroyed.connect(lambda: setattr(self, '_about_window', None))
 
         self._about_window = dlg
         dlg.show()
@@ -543,10 +549,16 @@ class OCRTranslatorApp:
         def _on_closed():
             print("[PREF] PreferencesWindow cerrada, limpiando referencia")
             self._prefs_window = None
+            # ✅ Desconectar señales para evitar acumulación
+            try:
+                self._signals.model_download_finished.disconnect(win.on_model_download_finished)
+                self._signals.model_download_failed.disconnect(win.on_model_download_failed)
+            except RuntimeError:
+                pass
             try:
                 self._register_hotkeys()
             except Exception as e:
-                print(f"[WARN] No se pudieron recargar hotkeys tras cerrar preferencias: {e}")
+                print(f"[WARN] No se pudieron recargar hotkeys: {e}")
 
         win.closed.connect(_on_closed)
         win.download_model_requested.connect(self._download_model_with_splash)
