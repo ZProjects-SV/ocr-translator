@@ -15,82 +15,63 @@
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
-from collections import OrderedDict
 import re
 
 from preferences import (
     get_translation_source,
     get_translation_target,
     get_translation_max_chars,
-    get_translation_cache_enabled,
 )
 
+
 # ==========================================================
-# BLOQUE: Motor de Traducción y Gestión de Caché
+# BLOQUE: Motor de Traducción — Ephemeral sin caché
 # ==========================================================
 class Translator:
-    """Motor de traducción usando Google Translate gratuito."""
+    """Motor de traducción usando Google Translate gratuito. Sin caché, patrón ephemeral."""
 
     def __init__(self) -> None:
-        self._cache: OrderedDict[str, str] = OrderedDict()
-        self._cache_max = 100
-        print("[OK] Traductor listo.")
-
-    def clear_cache(self) -> None:
-        """Limpia la cache de traducciones en memoria."""
-        self._cache.clear()
-        print("[CACHE] Cache de traducciones vaciada.")
+        print("[OK] Traductor listo (ephemeral, sin caché).")
 
     def translate(self, text: str) -> str:
         from deep_translator import GoogleTranslator
+        import time
+
         if not text:
             return ""
 
-        source        = get_translation_source()
-        target        = get_translation_target()
-        max_chars     = get_translation_max_chars()
-        cache_enabled = get_translation_cache_enabled()
-        
+        source    = get_translation_source()
+        target    = get_translation_target()
+        max_chars = get_translation_max_chars()
+
         text = "\n".join(line for line in text.split("\n") if line.strip())
 
-        #print(f"[TRANSLATE] Texto recibido ({len(text)} chars):\n{'-'*40}\n{text}\n{'-'*40}")
-
-        # Crear clave de caché ignorando puntuación básica
-        cache_key = f"{source}→{target}::{re.sub(r'[.…,!?]+', '', text.lower().strip())}"
-
-        if cache_enabled and cache_key in self._cache:
-            print("[CACHE] Usando traducción en cache.")
-            return self._cache[cache_key]
-
+        translator = None
         try:
-            if not hasattr(self, '_gt_instance') or \
-            self._gt_source != source or self._gt_target != target:
-                self._gt_instance = GoogleTranslator(source=source, target=target)
-                self._gt_source   = source
-                self._gt_target   = target
-
-            translator = self._gt_instance
+            print(f"[TRANSLATE] Instanciando GoogleTranslator ({source}→{target})...")
+            t0         = time.perf_counter()
+            translator = GoogleTranslator(source=source, target=target)
 
             if len(text) > max_chars:
-                chunks = [
-                    text[i : i + max_chars]
-                    for i in range(0, len(text), max_chars)
-                ]
+                chunks     = [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
                 translated = " ".join(translator.translate(chunk) for chunk in chunks)
             else:
                 translated = translator.translate(text)
 
-            # ✅ Log del resultado traducido
-            #print(f"[TRANSLATE] Resultado ({source}→{target}):\n{'-'*40}\n{translated}\n{'-'*40}")
-
-            if cache_enabled:
-                if len(self._cache) >= self._cache_max:
-                    self._cache.popitem(last=False)
-                self._cache[cache_key] = translated
-
+            print(f"[TRANSLATE] Completado en {time.perf_counter()-t0:.2f}s "
+                  f"({len(text)}→{len(translated)} chars)")
             return translated
 
         except Exception as e:
-            print(f"[TRANSLATE ERROR] {e}")
+            print(f"[TRANSLATE ERROR] {type(e).__name__}: {e}")
             return f"Error de traducción: {e}"
-# (Dependencias/Interacciones: Depende de 'preferences' en tiempo real y de la librería 'deep_translator'. Es instanciado por 'main.py' y su método 'translate' es llamado en el hilo de procesamiento de la captura.)
+
+        finally:
+            if translator is not None:
+                try:
+                    del translator
+                except Exception:
+                    pass
+            print("[TRANSLATE] GoogleTranslator destruido")
+# (Dependencias/Interacciones: Depende de 'preferences' en tiempo real y de 'deep_translator'.
+#  Es instanciado por 'main.py' y su método 'translate' es llamado en el hilo de procesamiento.)

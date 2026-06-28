@@ -380,13 +380,13 @@ class OCRTranslatorApp:
         result_window.show_loading()
 
         def process():
+            # 🆕 Trabajar con una copia local y liberar la referencia externa
             _img = cropped_image
             try:
                 result_window.update_status("Extrayendo texto...")
                 original_text, blocks = self.ocr_engine.extract_text_with_boxes(_img)
 
                 if not original_text:
-                    print("[DEBUG] No hay texto, cerrando...")
                     result_window.update_status("No se detectó texto")
                     result_window.close_after(2000)
                     return
@@ -398,23 +398,33 @@ class OCRTranslatorApp:
                     f"Traduciendo ({len(original_text)} caracteres)..."
                 )
                 translated_text = self.translator.translate(original_text)
-                try:
-                    print("[OK] Traducción completada")
-                except UnicodeEncodeError:
-                    print("[OK] Traduccion completada")
-
-                result_window.show_result(translated_text, _img, blocks)
-
+                
+                # 🆕 Crear una copia de la imagen para la ventana (más pequeña)
+                # para no mantener la original grande en memoria
+                display_img = _img.copy()
+                
+                result_window.show_result(translated_text, display_img, blocks)
+                
             except Exception as e:
                 print(f"[ERROR] {type(e).__name__}: {e}")
                 result_window.close_after(3000)
             finally:
+                # 🆕 Liberar referencias
                 _img = None
-                if self._active_result is result_window:
-                    self._active_result = None
+                
+                # 🆕 Programar liberación del wrapper Python tras un delay
+                # para dar tiempo a Qt a destruir el QWidget
+                def _cleanup_wrapper():
+                    if self._active_result is result_window:
+                        self._active_result = None
+                    # 🆕 Forzar GC solo aquí, no en cada OCR
+                    import gc
+                    gc.collect()
+                
+                QTimer.singleShot(100, _cleanup_wrapper)
 
         self.capturing = False
-        self._ocr_executor.submit(process)  # Serializa capturas, máx 1 thread OCR activo
+        self._ocr_executor.submit(process)
         result_window.run()
 
     # ==========================================================

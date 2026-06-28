@@ -15,25 +15,29 @@
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from core.ocr_engine import OCREngine
+import gc
+from core.ocr_engine import OCREngine
 from core.translator import Translator
+
 
 # ==========================================================
 # BLOQUE: Coordinador de Captura (Orquestador)
 # ==========================================================
 class ScreenCapture:
-    """Coordina la captura, OCR y traducción"""
+    """Coordina la captura, OCR y traducción."""
 
     def __init__(self, ocr_engine: OCREngine = None, translator: Translator = None):
-        # Si no se inyectan las instancias, lanzamos un error para evitar
-        # que PaddleOCR se inicialice múltiples veces consumiendo RAM.
         if ocr_engine is None or translator is None:
-            raise RuntimeError("ScreenCapture requiere instancias de OCREngine y Translator ya inicializadas.")
-        
+            raise RuntimeError(
+                "ScreenCapture requiere instancias de OCREngine y Translator ya inicializadas."
+            )
         self.ocr_engine = ocr_engine
         self.translator = translator
 
     def process(self, x1, y1, x2, y2):
-        """Procesa un área de pantalla: captura, OCR y traducción"""
+        """Procesa un área de pantalla: captura, OCR y traducción."""
+        original_text = None
+        translated_text = None
         try:
             original_text = self.ocr_engine.process_area(x1, y1, x2, y2)
 
@@ -45,7 +49,7 @@ class ScreenCapture:
             )
 
             print("=" * 60)
-            print("TEXTO ORIGINAL (EN):")
+            print("TEXTO ORIGINAL:")
             print("-" * 60)
             print(original_text)
             print("=" * 60)
@@ -60,4 +64,9 @@ class ScreenCapture:
 
         except Exception as e:
             return None, f"Error: {str(e)}"
+
+        finally:
+            # Liberar strings intermedios grandes si los hubiera
+            del original_text, translated_text
+            gc.collect()
 # (Dependencias/Interacciones: Depende directamente de 'ocr_engine.py' y 'translator.py'. Aunque está implementado como orquestador, actualmente 'main.py' hace esta orquestación manualmente en su método _run_result_window. Esta clase se mantiene por compatibilidad o para usos futuros directos.)
