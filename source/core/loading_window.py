@@ -22,37 +22,29 @@ from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRect, QPointF
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage
 from PIL import Image, ImageFilter
 import numpy as np
+import gc
 
-from preferences import (
-    get_result_font_family,
-)
+from preferences import get_result_font_family
+
 
 # ==========================================================
 # BLOQUE: Widget de imagen con zoom y drag
 # ==========================================================
 class ZoomableImageLabel(QLabel):
-    """
-    QLabel extendido que soporta:
-    - Zoom con rueda del ratón (centrado en el cursor)
-    - Arrastre con clic izquierdo para desplazar la imagen
-    """
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap_original: QPixmap | None = None
         self._zoom = 1.0
         self._zoom_min = 0.2
         self._zoom_max = 8.0
-        self._offset = QPointF(0, 0)          # desplazamiento acumulado
+        self._offset = QPointF(0, 0)
         self._drag_active = False
         self._drag_last = QPointF()
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
 
-    # ── API pública ─────────────────────────────────────────
     def setSourcePixmap(self, pixmap: QPixmap):
-        """Carga el pixmap base y resetea la vista."""
         self._pixmap_original = pixmap
         self._zoom = 1.0
         self._offset = QPointF(0, 0)
@@ -63,20 +55,20 @@ class ZoomableImageLabel(QLabel):
         self._offset = QPointF(0, 0)
         self._redraw()
 
-    # ── Eventos ──────────────────────────────────────────────
+    def clearPixmaps(self):
+        """Libera todos los pixmaps internos. Llamar antes de deleteLater()."""
+        self._pixmap_original = None
+        super().setPixmap(QPixmap())  # pixmap vacío
+
     def wheelEvent(self, event: QWheelEvent):
         if not self._pixmap_original:
             return
         delta = event.angleDelta().y()
         factor = 1.15 if delta > 0 else (1 / 1.15)
         new_zoom = max(self._zoom_min, min(self._zoom_max, self._zoom * factor))
-
-        # Zoom centrado en la posición del cursor
         cursor_pos = QPointF(event.position())
-        # Punto en el espacio de la imagen antes del zoom
         img_point = (cursor_pos - self._offset) / self._zoom
         self._zoom = new_zoom
-        # Recalcular offset para que el mismo punto quede bajo el cursor
         self._offset = cursor_pos - img_point * self._zoom
         self._redraw()
 
@@ -98,7 +90,6 @@ class ZoomableImageLabel(QLabel):
             self._drag_active = False
             self.setCursor(Qt.OpenHandCursor)
 
-    # ── Renderizado ──────────────────────────────────────────
     def _redraw(self):
         if not self._pixmap_original:
             return
@@ -106,7 +97,6 @@ class ZoomableImageLabel(QLabel):
         h = self.height()
         canvas = QPixmap(w, h)
         canvas.fill(QColor("#1a1a1a"))
-
         scaled = self._pixmap_original.scaled(
             int(self._pixmap_original.width() * self._zoom),
             int(self._pixmap_original.height() * self._zoom),
@@ -114,21 +104,15 @@ class ZoomableImageLabel(QLabel):
             Qt.SmoothTransformation,
         )
         painter = QPainter(canvas)
-        painter.drawPixmap(
-            int(self._offset.x()),
-            int(self._offset.y()),
-            scaled,
-        )
+        painter.drawPixmap(int(self._offset.x()), int(self._offset.y()), scaled)
         painter.end()
+        del scaled
         super().setPixmap(canvas)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._redraw()
+        # canvas queda en QLabel, su ciclo de vida lo maneja Qt
 
 
 # ==========================================================
-# BLOQUE: Señales y Clase Principal (Controlador)
+# BLOQUE: Señales
 # ==========================================================
 class _Signals(QObject):
     update_status = Signal(str)
@@ -139,8 +123,11 @@ class _Signals(QObject):
         super().__init__(parent)
 
 
+# ==========================================================
+# BLOQUE: Ventana Unificada
+# ==========================================================
 class UnifiedResultWindow:
-    """Ventana unificada: muestra loading y luego resultado en la misma ventana"""
+    """Ventana unificada: muestra loading y luego resultado."""
 
     def __init__(self, x1, y1, x2, y2, margin=0):
         self.x1        = x1
@@ -152,9 +139,7 @@ class UnifiedResultWindow:
         self.is_closed = False
         self._image    = None
         self._blocks   = None
-        self._signals  = None  
-
-        # Pixmaps para antes/después
+        self._signals  = None
         self._pixmap_before: QPixmap | None = None
         self._pixmap_after:  QPixmap | None = None
         self._showing_after  = True
@@ -162,12 +147,11 @@ class UnifiedResultWindow:
         self._toggle_btn: QPushButton | None = None
 
 
-# ==========================================================
-# BLOQUE: API Pública
-# ==========================================================
+    # ==========================================================
+    # BLOQUE: API Pública
+    # ==========================================================
     def show_loading(self):
         self.width = min(max(self.x2 - self.x1, 320), 500)
-
         self.window = QWidget()
         self._signals = _Signals(self.window)
         self._signals.update_status.connect(self._do_update_status)
@@ -195,15 +179,18 @@ class UnifiedResultWindow:
         return self.window
 
     def update_status(self, message):
-        self._signals.update_status.emit(message)
+        if self._signals:
+            self._signals.update_status.emit(message)
 
     def show_result(self, translated_text, image=None, blocks=None):
         self._image  = image
         self._blocks = blocks
-        self._signals.show_result.emit(translated_text)
+        if self._signals:
+            self._signals.show_result.emit(translated_text)
 
     def close_after(self, ms: int):
-        self._signals.close_window.emit(ms)
+        if self._signals:
+            self._signals.close_window.emit(ms)
 
     def _delayed_close(self, ms: int):
         QTimer.singleShot(ms, self.close)
@@ -222,9 +209,9 @@ class UnifiedResultWindow:
             self.window.show()
 
 
-# ==========================================================
-# BLOQUE: Slots de Actualización (Hilo Principal Qt)
-# ==========================================================
+    # ==========================================================
+    # BLOQUE: Slots Qt (hilo principal)
+    # ==========================================================
     def _do_update_status(self, message):
         if self.is_closed or not hasattr(self, '_status_label'):
             return
@@ -236,6 +223,7 @@ class UnifiedResultWindow:
 
         self.window.setVisible(False)
 
+        # Limpiar widgets anteriores del layout
         while self._layout.count():
             item = self._layout.takeAt(0)
             w = item.widget()
@@ -245,13 +233,158 @@ class UnifiedResultWindow:
 
         self.window.setStyleSheet("background-color: #1e1e1e;")
         self._show_result_content(translated_text, self._image, self._blocks)
-
         self.window.setVisible(True)
 
 
-# ==========================================================
-# BLOQUE: Renderizado de UI (Loading y Resultado Final)
-# ==========================================================
+    # ==========================================================
+    # BLOQUE: Helpers de imagen
+    # ==========================================================
+    @staticmethod
+    def _dominant_text_color_from_array(img_array: np.ndarray, bx1, by1, bx2, by2) -> QColor:
+        img_h, img_w = img_array.shape[:2]
+        x1 = max(0, min(bx1, bx2)); x2 = min(img_w, max(bx1, bx2))
+        y1 = max(0, min(by1, by2)); y2 = min(img_h, max(by1, by2))
+        if x2 <= x1 or y2 <= y1:
+            return QColor(255, 255, 255)
+        region = img_array[y1:y2, x1:x2]
+        gray   = np.mean(region, axis=2)
+        median_brightness = np.median(gray)
+        if median_brightness < 128:
+            threshold = np.percentile(gray, 85)
+            mask = gray >= threshold
+        else:
+            threshold = np.percentile(gray, 15)
+            mask = gray <= threshold
+        pixels = region[mask]
+        if len(pixels) == 0:
+            pixels = region.reshape(-1, 3)
+        avg = np.mean(pixels, axis=0).astype(int)
+        return QColor(int(avg[0]), int(avg[1]), int(avg[2]))
+
+    @staticmethod
+    def _pil_to_pixmap(image: Image.Image) -> QPixmap:
+        """Convierte PIL Image a QPixmap con deep copy del buffer."""
+        rgba = image.convert("RGBA")
+        data = rgba.tobytes("raw", "RGBA")
+        qimg = QImage(data, rgba.width, rgba.height, rgba.width * 4,
+                      QImage.Format_RGBA8888).copy()  # .copy() = deep copy
+        pixmap = QPixmap.fromImage(qimg)
+        del data, qimg, rgba
+        return pixmap
+
+    @staticmethod
+    def _build_original_pixmap(image: Image.Image, disp_w: int, disp_h: int) -> QPixmap:
+        resized = image.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+        px = UnifiedResultWindow._pil_to_pixmap(resized)
+        resized.close()
+        del resized
+        return px
+
+    def _build_translated_pixmap(
+        self,
+        image: Image.Image,
+        blocks: list,
+        translated_lines: list[str],
+        disp_w: int,
+        disp_h: int,
+        scale_factor: float,
+    ) -> QPixmap:
+        img_w, img_h = image.size
+
+        # ── Difuminar regiones de texto ──────────────────────
+        blurred = image.copy()
+        for block in blocks:
+            bx1, by1, bx2, by2 = block["box"]
+            x1 = min(bx1, bx2); x2 = max(bx1, bx2)
+            y1 = min(by1, by2); y2 = max(by1, by2)
+            pad = 3
+            cx1 = max(0, x1 - pad); cy1 = max(0, y1 - pad)
+            cx2 = min(img_w, x2 + pad); cy2 = min(img_h, y2 + pad)
+            if cx2 <= cx1 or cy2 <= cy1:
+                continue
+            region = image.crop((cx1, cy1, cx2, cy2))
+            region = region.filter(ImageFilter.GaussianBlur(radius=6))
+            blurred.paste(region, (cx1, cy1))
+            region.close()
+            del region
+
+        blurred_resized = blurred.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+        blurred.close()
+        del blurred
+
+        pixmap = self._pil_to_pixmap(blurred_resized)
+        blurred_resized.close()
+        del blurred_resized
+
+        # ── Dibujar texto traducido encima ───────────────────
+        # Array numpy solo para detección de color — se libera al terminar el bloque
+        img_array = np.array(image.convert("RGB"))
+
+        painter = QPainter(pixmap)
+        line_idx = 0
+        for block in blocks:
+            if line_idx >= len(translated_lines):
+                break
+            bx1, by1, bx2, by2 = block["box"]
+            rx1 = int(bx1 * scale_factor); ry1 = int(by1 * scale_factor)
+            rx2 = int(bx2 * scale_factor); ry2 = int(by2 * scale_factor)
+
+            text_color = self._dominant_text_color_from_array(img_array, bx1, by1, bx2, by2)
+            box_w = rx2 - rx1; box_h = ry2 - ry1
+            text = translated_lines[line_idx]
+            line_idx += 1
+
+            font_size = max(8, int(box_h * 0.8))
+            font = QF(get_result_font_family(), font_size)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            while font_size > 6 and fm.horizontalAdvance(text) > box_w - 4:
+                font_size -= 1
+                font = QF(get_result_font_family(), font_size)
+                painter.setFont(font)
+                fm = painter.fontMetrics()
+
+            painter.setPen(QPen(text_color))
+            painter.drawText(QRect(rx1 + 2, ry1, box_w - 4, box_h),
+                             Qt.AlignVCenter | Qt.AlignLeft, text)
+
+        painter.end()
+
+        # Liberar array numpy — ya no se necesita
+        del img_array
+        gc.collect()
+
+        return pixmap
+
+
+    # ==========================================================
+    # BLOQUE: Toggle antes/después
+    # ==========================================================
+    def _toggle_view(self):
+        self._showing_after = not self._showing_after
+        if self._showing_after:
+            self._zoom_label.setSourcePixmap(self._pixmap_after)
+            self._toggle_btn.setText("Ver original")
+        else:
+            # Construir pixmap "before" bajo demanda (no ocupar memoria si nunca se usa)
+            if self._pixmap_before is None and self._image is not None:
+                img_w, img_h = self._image.size
+                max_w = 800
+                if img_w > max_w:
+                    scale  = max_w / img_w
+                    disp_w = max_w
+                    disp_h = int(img_h * scale)
+                else:
+                    disp_w = img_w
+                    disp_h = img_h
+                self._pixmap_before = self._build_original_pixmap(self._image, disp_w, disp_h)
+            self._zoom_label.setSourcePixmap(self._pixmap_before)
+            self._toggle_btn.setText("Ver traducción")
+
+
+    # ==========================================================
+    # BLOQUE: Renderizado de contenido
+    # ==========================================================
     def _show_loading_content(self):
         self._layout.setContentsMargins(24, 20, 24, 20)
         self._layout.setSpacing(12)
@@ -297,145 +430,12 @@ class UnifiedResultWindow:
         hint.setAlignment(Qt.AlignLeft)
         self._layout.addWidget(hint)
 
-    # ── Helpers de color ────────────────────────────────────
-    @staticmethod
-    def _dominant_text_color_from_array(img_array: np.ndarray, bx1, by1, bx2, by2) -> QColor:
-        """Igual que antes pero recibe el array ya convertido."""
-        img_h, img_w = img_array.shape[:2]
-        x1 = max(0, min(bx1, bx2)); x2 = min(img_w, max(bx1, bx2))
-        y1 = max(0, min(by1, by2)); y2 = min(img_h, max(by1, by2))
-
-        if x2 <= x1 or y2 <= y1:
-            return QColor(255, 255, 255)
-
-        region = img_array[y1:y2, x1:x2]
-        gray   = np.mean(region, axis=2)
-        median_brightness = np.median(gray)
-
-        if median_brightness < 128:
-            threshold = np.percentile(gray, 85)
-            mask = gray >= threshold
-        else:
-            threshold = np.percentile(gray, 15)
-            mask = gray <= threshold
-
-        pixels = region[mask]
-        if len(pixels) == 0:
-            pixels = region.reshape(-1, 3)
-
-        avg = np.mean(pixels, axis=0).astype(int)
-        return QColor(int(avg[0]), int(avg[1]), int(avg[2]))
-
-    # ── Construcción del pixmap traducido ───────────────────
-    def _build_translated_pixmap(
-        self,
-        image: Image.Image,
-        blocks: list,
-        translated_lines: list[str],
-        disp_w: int,
-        disp_h: int,
-        scale_factor: float,
-    ) -> QPixmap:
-        """Genera el pixmap con fondo difuminado y texto traducido superpuesto."""
-        img_w, img_h = image.size
-
-        # Difuminar fondo en todos los bloques
-        blurred = image.copy()
-        for block in blocks:
-            bx1, by1, bx2, by2 = block["box"]
-            x1 = min(bx1, bx2); x2 = max(bx1, bx2)
-            y1 = min(by1, by2); y2 = max(by1, by2)
-            pad = 3
-            cx1 = max(0, x1 - pad); cy1 = max(0, y1 - pad)
-            cx2 = min(img_w, x2 + pad); cy2 = min(img_h, y2 + pad)
-            if cx2 <= cx1 or cy2 <= cy1:
-                continue
-            region = image.crop((cx1, cy1, cx2, cy2))
-            region = region.filter(ImageFilter.GaussianBlur(radius=6))
-            blurred.paste(region, (cx1, cy1))
-
-        blurred = blurred.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-
-        pixmap = UnifiedResultWindow._pil_to_pixmap(blurred)
-
-        painter = QPainter(pixmap)
-        line_idx = 0
-        
-        img_array = np.array(image.convert("RGB"))
-
-        for block in blocks:
-            if line_idx >= len(translated_lines):
-                break
-
-            bx1, by1, bx2, by2 = block["box"]
-            rx1 = int(bx1 * scale_factor)
-            ry1 = int(by1 * scale_factor)
-            rx2 = int(bx2 * scale_factor)
-            ry2 = int(by2 * scale_factor)
-
-            text_color = self._dominant_text_color_from_array(img_array, bx1, by1, bx2, by2)
-
-            box_w = rx2 - rx1
-            box_h = ry2 - ry1
-            text = translated_lines[line_idx]
-            line_idx += 1
-
-            font_size = max(8, int(box_h * 0.8))
-            font = QF(get_result_font_family(), font_size)
-            painter.setFont(font)
-            fm = painter.fontMetrics()
-
-            while font_size > 6 and fm.horizontalAdvance(text) > box_w - 4:
-                font_size -= 1
-                font = QF(get_result_font_family(), font_size)
-                painter.setFont(font)
-                fm = painter.fontMetrics()
-
-            painter.setPen(QPen(text_color))
-            painter.drawText(
-                QRect(rx1 + 2, ry1, box_w - 4, box_h),
-                Qt.AlignVCenter | Qt.AlignLeft,
-                text,
-            )
-
-        painter.end()
-        return pixmap
-
-    # ── Construcción del pixmap "antes" (imagen original) ───
-    @staticmethod
-    def _pil_to_pixmap(image: Image.Image) -> QPixmap:
-        """Convierte PIL Image a QPixmap sin pasar por PNG — más rápido."""
-        image = image.convert("RGBA")
-        data  = image.tobytes("raw", "RGBA")
-        qimg = QImage(data, image.width, image.height, QImage.Format_RGBA8888)
-        return QPixmap.fromImage(qimg)
-
-    @staticmethod
-    def _build_original_pixmap(image: Image.Image, disp_w: int, disp_h: int) -> QPixmap:
-        resized = image.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-        return UnifiedResultWindow._pil_to_pixmap(resized)
-
-    # ── Toggle antes/después ─────────────────────────────────
-    def _toggle_view(self):
-        self._showing_after = not self._showing_after
-        if self._showing_after:
-            self._zoom_label.setSourcePixmap(self._pixmap_after)
-            self._toggle_btn.setText("Ver original")
-            self._toggle_btn.setToolTip("Muestra la captura sin traducción")
-        else:
-            self._zoom_label.setSourcePixmap(self._pixmap_before)
-            self._toggle_btn.setText("Ver traducción")
-            self._toggle_btn.setToolTip("Muestra el texto traducido superpuesto")
-
-    # ── Resultado principal ──────────────────────────────────
     def _show_result_content(self, translated_text, image=None, blocks=None):
         if image and blocks:
             img_w, img_h = image.size
-
-            # Escala de display
             max_w = 800
             if img_w > max_w:
-                scale = max_w / img_w
+                scale  = max_w / img_w
                 disp_w = max_w
                 disp_h = int(img_h * scale)
             else:
@@ -449,13 +449,11 @@ class UnifiedResultWindow:
                 if style:
                     fram_margin = style.pixelMetric(QStyle.PM_TitleBarHeight)
 
-            padding_x = 10
-            padding_y = 10
-
-            # Altura extra: barra de controles (toggle + zoom hint + cerrar)
+            padding_x  = 10
+            padding_y  = 10
             controls_h = 50
-            total_w = disp_w + (padding_x * 2)
-            total_h = disp_h + controls_h + fram_margin + padding_y
+            total_w    = disp_w + (padding_x * 2)
+            total_h    = disp_h + controls_h + fram_margin + padding_y
 
             self.window.setMinimumSize(0, 0)
             self.window.setMaximumSize(16777215, 16777215)
@@ -463,19 +461,21 @@ class UnifiedResultWindow:
             self._layout.setContentsMargins(padding_x, padding_y, padding_x, 0)
             self._layout.setSpacing(0)
 
-            scale_factor = disp_w / img_w
+            scale_factor     = disp_w / img_w
             translated_lines = [l for l in translated_text.split('\n') if l.strip()]
 
-            # Construir ambos pixmaps
-            self._pixmap_after  = self._build_translated_pixmap(
+            # Limpiar pixmaps previos antes de construir los nuevos
+            self._pixmap_after  = None
+            self._pixmap_before = None
+
+            self._pixmap_after = self._build_translated_pixmap(
                 image, blocks, translated_lines, disp_w, disp_h, scale_factor
             )
-            self._pixmap_before = self._build_original_pixmap(image, disp_w, disp_h)
+            # _pixmap_before se crea bajo demanda en _toggle_view
 
-            # Widget zoomable
             self._zoom_label = ZoomableImageLabel()
             self._zoom_label.setFixedSize(disp_w, disp_h)
-            self._zoom_label.setSourcePixmap(self._pixmap_after)   # empieza en traducción
+            self._zoom_label.setSourcePixmap(self._pixmap_after)
             self._showing_after = True
 
             img_layout = QHBoxLayout()
@@ -497,22 +497,16 @@ class UnifiedResultWindow:
         # ── Barra de controles inferior ──────────────────────
         btn_style_secondary = """
             QPushButton {
-                background-color: #3a3a3a;
-                color: #e0e0e0;
-                border: 1px solid #555555;
-                border-radius: 4px;
-                padding: 0 12px;
+                background-color: #3a3a3a; color: #e0e0e0;
+                border: 1px solid #555555; border-radius: 4px; padding: 0 12px;
             }
             QPushButton:hover   { background-color: #4a4a4a; }
             QPushButton:pressed { background-color: #2a2a2a; }
         """
         btn_style_primary = """
             QPushButton {
-                background-color: #0078d4;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 0 16px;
+                background-color: #0078d4; color: white;
+                border: none; border-radius: 4px; padding: 0 16px;
             }
             QPushButton:hover   { background-color: #106ebe; }
             QPushButton:pressed { background-color: #005a9e; }
@@ -523,7 +517,6 @@ class UnifiedResultWindow:
         btn_bar.setSpacing(8)
 
         if image and blocks:
-            # Botón antes/después
             self._toggle_btn = QPushButton("Ver original")
             self._toggle_btn.setToolTip("Muestra la captura sin traducción")
             self._toggle_btn.setFont(QFont("Segoe UI", 9))
@@ -532,7 +525,6 @@ class UnifiedResultWindow:
             self._toggle_btn.clicked.connect(self._toggle_view)
             btn_bar.addWidget(self._toggle_btn)
 
-            # Botón resetear zoom
             btn_reset = QPushButton("Reset zoom")
             btn_reset.setFont(QFont("Segoe UI", 9))
             btn_reset.setFixedHeight(32)
@@ -541,7 +533,6 @@ class UnifiedResultWindow:
             btn_reset.clicked.connect(lambda: self._zoom_label.resetView())
             btn_bar.addWidget(btn_reset)
 
-            # Hint scroll
             hint = QLabel("Scroll: zoom  •  Arrastrar: mover")
             hint.setFont(QFont("Segoe UI", 8))
             hint.setStyleSheet("color: #888888;")
@@ -558,12 +549,49 @@ class UnifiedResultWindow:
 
         self._layout.addLayout(btn_bar)
 
+
+    # ==========================================================
+    # BLOQUE: Cierre y Limpieza de Memoria
+    # ==========================================================
     def _on_close_event(self, event):
         self.is_closed = True
-        self._image         = None
-        self._blocks        = None
+
+        # 1. Limpiar ZoomableImageLabel antes de deleteLater
+        if self._zoom_label is not None:
+            try:
+                self._zoom_label.clearPixmaps()
+                self._zoom_label.deleteLater()
+            except Exception:
+                pass
+            self._zoom_label = None
+
+        # 2. Nullear pixmaps — Qt libera la memoria del QImage subyacente
+        #    cuando el último QPixmap que lo referencia desaparece
         self._pixmap_before = None
         self._pixmap_after  = None
-        self._zoom_label    = None
-        self._toggle_btn    = None
+
+        # 3. Liberar imagen PIL
+        if self._image is not None:
+            try:
+                self._image.close()
+            except Exception:
+                pass
+            self._image = None
+
+        # 4. Limpiar referencias restantes
+        self._blocks     = None
+        self._toggle_btn = None
+        self._signals    = None
+
+        # 5. Limpiar widgets del layout
+        if hasattr(self, '_layout') and self._layout is not None:
+            while self._layout.count():
+                item = self._layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+
+        # 6. GC explícito para liberar arrays numpy y buffers PIL rezagados
+        gc.collect()
+
         event.accept()

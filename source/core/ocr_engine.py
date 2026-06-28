@@ -1,32 +1,12 @@
-# OCR Translator
-# Copyright (C) 2026 ZProjects
-#
-# This file is part of OCR Translator.
-# OCR Translator is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# OCR Translator is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 import os
 import sys
 import gc
+import time
+import random
 
-# Hack de sys.path necesario para que PyInstaller y submódulos encuentren
-# los recursos de PaddleOCR al empaquetar como .exe.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-import cv2
-import numpy as np
-from PIL import ImageGrab, Image, ImageFilter, ImageEnhance
-
+from PIL import ImageGrab, Image
 
 from config import (
     PADDLE_LANG,
@@ -37,42 +17,25 @@ from config import (
 from preferences import get_translation_source, get_downloaded_langs, add_downloaded_lang
 
 
-
 # ==========================================================
-# BLOQUE: Detección de tipo de fuente
+# BLOQUE: Detección de tipo de fuente (PLACEBO)
 # ==========================================================
 def _is_pixel_font(image: Image.Image) -> bool:
-    """
-    Heurística rápida para detectar si la imagen contiene texto pixeleado.
-    Analiza el ratio de bordes duros (transiciones abruptas de 0→255) vs suaves.
-    Un ratio alto indica pixel art / fuentes de videojuego pixeleadas.
-    """
-    gray = np.array(image.convert("L"))
-    dx = np.abs(np.diff(gray.astype(np.int16), axis=1))
-    dy = np.abs(np.diff(gray.astype(np.int16), axis=0))
-    # Bordes "duros": transición mayor a 200 niveles de gris en 1 píxel
-    hard_edges = np.sum(dx > 200) + np.sum(dy > 200)
-    # Bordes "suaves": transición entre 30 y 200
-    soft_edges = np.sum((dx > 30) & (dx <= 200)) + np.sum((dy > 30) & (dy <= 200))
-    total = hard_edges + soft_edges
-    if total == 0:
-        return False
-    ratio = hard_edges / total
-    # Si más del 60% de los bordes son duros, es probablemente pixel font
-    return ratio > 0.60
-
+    print(f"[PLACEBO] _is_pixel_font: imagen={image.width}x{image.height} -> False (simulado)")
+    return False
 
 
 # ==========================================================
-# BLOQUE: Clase Principal y Gestión de Modelos (Singleton-like)
+# BLOQUE: Clase Principal (PLACEBO — sin PaddleOCR real)
 # ==========================================================
 class OCREngine:
-    """Motor de reconocimiento óptico de caracteres usando PaddleOCR v2.x"""
-
+    """
+    PLACEBO: Simula el OCREngine sin cargar PaddleOCR.
+    Retorna texto de prueba fijo para verificar el flujo completo.
+    """
 
     _instance = None
-    _downloaded_langs: set[str] = set()  # idiomas con modelo ya disponible en disco
-
+    _downloaded_langs: set = set()
 
     @classmethod
     def get_instance(cls):
@@ -80,298 +43,129 @@ class OCREngine:
             cls._instance = cls()
         return cls._instance
 
-
     @classmethod
     def mark_lang_downloaded(cls, source_lang: str) -> None:
-        """Registra en memoria y en disco que el modelo ya está disponible."""
         cls._downloaded_langs.add(source_lang)
         add_downloaded_lang(source_lang)
 
-
     @classmethod
     def is_model_downloaded(cls, source_lang: str) -> bool:
-        """Devuelve True si el modelo para este idioma ya fue descargado."""
         return source_lang in cls._downloaded_langs
 
-
     def __init__(self):
+        print("[PLACEBO] OCREngine.__init__: inicializando motor SIMULADO...")
         self._engine = None
         self._current_lang = None
-        # Restaurar idiomas ya descargados en sesiones anteriores
         OCREngine._downloaded_langs.update(get_downloaded_langs())
         self._init_engine()
-
+        print("[PLACEBO] OCREngine.__init__: listo (sin PaddleOCR)")
 
     def _init_engine(self, source_lang: str = None) -> None:
-        """Inicializa PaddleOCR. Si source_lang es None, lo lee de preferencias."""
-        from paddleocr import PaddleOCR
-        try:
-            source_lang = source_lang or get_translation_source() or "en"
-            paddle_lang = TRANSLATION_TO_PADDLE_LANG.get(source_lang, PADDLE_LANG)
-            print(f"[INFO] Inicializando PaddleOCR para idioma origen '{source_lang}' -> modelo '{paddle_lang}'...")
-            self._engine = PaddleOCR(
-                use_angle_cls=False,
-                lang=paddle_lang,
-                use_gpu=False,
-                show_log=False,
-                det_db_thresh=0.2,
-                det_db_box_thresh=0.4,
-                det_db_unclip_ratio=1.8,
-                det_db_score_mode='slow', 
-                rec_image_shape='3,48,320',
-                drop_score=0.3,
-            )
-            self._current_lang = source_lang
-            OCREngine.mark_lang_downloaded(source_lang)
-            print("[INFO] PaddleOCR listo.")
-        except Exception as e:
-            raise RuntimeError(
-                f"No se pudo inicializar PaddleOCR: {e}\n"
-                "Asegúrate de haber instalado: pip install paddlepaddle==2.6.2 paddleocr==2.8.1"
-            )
-
+        print("[PLACEBO] _init_engine: simulando carga de modelo...")
+        t0 = time.perf_counter()
+        # Simula el tiempo de carga (~0.5s)
+        time.sleep(0.5)
+        source_lang = source_lang or get_translation_source() or "en"
+        paddle_lang = TRANSLATION_TO_PADDLE_LANG.get(source_lang, PADDLE_LANG)
+        self._engine = "FAKE_ENGINE"  # placeholder — nunca se llama
+        self._current_lang = source_lang
+        OCREngine.mark_lang_downloaded(source_lang)
+        print(f"[PLACEBO] _init_engine: 'modelo' listo para lang='{source_lang}' "
+              f"(paddle='{paddle_lang}') en {time.perf_counter()-t0:.2f}s")
 
     def _get_paddle_lang(self, source_lang: str) -> str:
-        """Devuelve el nombre de modelo Paddle para un idioma origen."""
         return TRANSLATION_TO_PADDLE_LANG.get(source_lang, PADDLE_LANG)
 
-
     def _ensure_engine_lang(self) -> None:
-        """Recrea el engine si cambió el idioma origen en preferencias."""
         source_lang = get_translation_source() or "en"
-        if source_lang != self._current_lang:
-            print(f"[INFO] Cambio de idioma OCR detectado: {self._current_lang} -> {source_lang}")
+        if self._engine is None or source_lang != self._current_lang:
+            if self._engine is None:
+                print("[PLACEBO] _ensure_engine_lang: engine no cargado, reinicializando...")
+            else:
+                print(f"[PLACEBO] _ensure_engine_lang: cambio de idioma {self._current_lang} -> {source_lang}")
             self._init_engine()
-# (Dependencias/Interacciones: Depende de 'preferences' para saber qué idioma usar y de 'config' para mapear los idiomas. Es instanciado por 'main.py' en su carga inicial.)
 
 
-
-# ==========================================================
-# BLOQUE: Captura y Preprocesamiento de Imagen
-# ==========================================================
+    # ==========================================================
+    # BLOQUE: Captura y Preprocesamiento (PLACEBO)
+    # ==========================================================
     def capture_area(self, x1, y1, x2, y2) -> Image.Image:
-        """Captura un área específica de la pantalla"""
+        print(f"[PLACEBO] capture_area: ({x1},{y1})->({x2},{y2})")
         return ImageGrab.grab(bbox=(x1, y1, x2, y2))
 
-
     def _preprocess(self, image: Image.Image) -> Image.Image:
-        """
-        Preprocesamiento adaptativo: detecta automáticamente si la imagen tiene
-        fuente pixeleada (Minecraft-style) y aplica el pipeline correcto.
-        """
-        if _is_pixel_font(image):
-            return self._preprocess_pixel_font(image)
-        else:
-            return self._preprocess_standard(image)
-
+        print(f"[PLACEBO] _preprocess: imagen={image.width}x{image.height} -> devolviendo original")
+        return image
 
     def _preprocess_pixel_font(self, image: Image.Image) -> Image.Image:
-        """
-        Pipeline especializado para fuentes pixeleadas (Minecraft, RPG, arcade).
-
-        Clave: escalar con NEAREST NEIGHBOR para preservar bordes duros.
-        La interpolación bilineal/LANCZOS suaviza el pixel art y destruye la legibilidad.
-        Mejora: binarización adaptativa como fallback cuando Otsu falla en fondos
-        no uniformes (gradientes, HUDs con sombras).
-        """
-        img_cv = np.array(image.convert("RGB"))
-        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
-        h, w = img_cv.shape[:2]
-
-        scale_factor = 4
-        img_cv = cv2.resize(
-            img_cv,
-            (w * scale_factor, h * scale_factor),
-            interpolation=cv2.INTER_NEAREST
-        )
-
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-        del img_cv 
-
-        _, binary_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        white_ratio = np.sum(binary_otsu == 255) / binary_otsu.size
-        if white_ratio < 0.05 or white_ratio > 0.95:
-            binary = cv2.adaptiveThreshold(
-                gray, 255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 15, 2
-            )
-            print("[INFO] Pixel font: usando binarización adaptativa (Otsu falló)")
-        else:
-            binary = binary_otsu
-
-        del gray 
-        del binary_otsu
-
-        if h < 30:
-            kernel = np.ones((2, 2), np.uint8)
-            binary = cv2.dilate(binary, kernel, iterations=1)
-
-        result = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
-        del binary
-        out = Image.fromarray(result)
-        del result  
-        print(f"[INFO] Preprocesamiento pixel-font aplicado (escala x{scale_factor}, Nearest Neighbor)")
-        return out
-
+        print(f"[PLACEBO] _preprocess_pixel_font: omitido, devolviendo original")
+        return image
 
     def _preprocess_standard(self, image: Image.Image) -> Image.Image:
-        """
-        Pipeline estándar para fuentes normales (antialiased).
-        Mejoras respecto al original:
-        - CLAHE adaptativo por zona en lugar de contraste fijo global
-        - Denoise ligero para eliminar artefactos de compresión de pantalla
-        """
-        img_cv = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-
-        if image.width < 600:
-            denoised = cv2.fastNlMeansDenoisingColored(img_cv, None,
-                h=3, hColor=3, templateWindowSize=7, searchWindowSize=21)
-            del img_cv
-            img_cv = denoised
-
-        lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
-        del img_cv
-
-        l, a, b = cv2.split(lab)
-        del lab
-
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l = clahe.apply(l)
-
-        lab_merged = cv2.merge((l, a, b))
-        del l, a, b
-
-        img_cv = cv2.cvtColor(lab_merged, cv2.COLOR_LAB2BGR)
-        del lab_merged
-
-        rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-        del img_cv
-
-        out = Image.fromarray(rgb).filter(ImageFilter.SHARPEN)
-        del rgb
-        return out
-# (Dependencias/Interacciones: Usa PIL y OpenCV. _preprocess delega automáticamente según el tipo de fuente detectado.)
+        print(f"[PLACEBO] _preprocess_standard: omitido, devolviendo original")
+        return image
 
 
-
-# ==========================================================
-# BLOQUE: Extracción de Texto (Plano y con Cajas)
-# ==========================================================
+    # ==========================================================
+    # BLOQUE: Extracción de Texto (PLACEBO — texto fijo simulado)
+    # ==========================================================
     def extract_text(self, image: Image.Image, lang: str = None) -> str:
-        try:
-            if image.width == 0 or image.height == 0:
-                return ""
-            if image.width < 10 or image.height < 10:
-                return ""
+        self._ensure_engine_lang()
+        print(f"[PLACEBO] extract_text: imagen={image.width}x{image.height}, lang={lang}")
 
-            # Detectar ANTES de preprocesar
-            pixel_font = _is_pixel_font(image)
-            min_conf = PADDLE_MIN_CONFIDENCE_PIXEL if pixel_font else PADDLE_MIN_CONFIDENCE
+        if image.width < 10 or image.height < 10:
+            print("[PLACEBO] extract_text: imagen demasiado pequeña, retornando ''")
+            return ""
 
-            image = self._preprocess(image)
-            img_array = np.array(image.convert("RGB"))
-            result = self._engine.ocr(img_array, cls=False)
-            del img_array
-            del image 
-
-            if not result or not result[0]:
-                return ""
-
-            valid = [
-                line for line in result[0]
-                if line and line[1][1] >= min_conf  # <- umbral adaptativo
-            ]
-            valid.sort(key=lambda l: l[0][0][1])
-            return "\n".join(line[1][0] for line in valid).strip()
-
-        except Exception as e:
-            print(f"[ERROR] Error en OCR: {str(e)}")
-            raise RuntimeError(f"Error en OCR: {str(e)}")
-        finally:
-            gc.collect()
-
+        # Simula latencia OCR
+        time.sleep(0.3)
+        fake_text = "Hello World\nThis is a placeholder OCR result\nLine three of fake text"
+        print(f"[PLACEBO] extract_text: retornando texto simulado ({len(fake_text)} chars)")
+        return fake_text
 
     def extract_text_with_boxes(self, image: Image.Image):
-        """
-        Extrae texto con posiciones. Retorna (texto_completo, lista_de_bloques)
-        Cada bloque: {'text': str, 'box': (x1, y1, x2, y2), 'conf': float}
+        self._ensure_engine_lang()
+        print(f"[PLACEBO] extract_text_with_boxes: imagen={image.width}x{image.height}")
 
-        NOTA: cuando se aplica preprocesamiento pixel-font (escala x4), las coordenadas
-        se dividen entre 'scale' para devolverlas a la resolución original.
-        """
-        try:
-            if image.width < 10 or image.height < 10:
-                return "", []
+        if image.width < 10 or image.height < 10:
+            print("[PLACEBO] extract_text_with_boxes: imagen demasiado pequeña, retornando vacío")
+            return "", []
 
-            # Detectar tipo de fuente ANTES de preprocesar para calcular scale correcto
-            pixel_font = _is_pixel_font(image)
+        # Simula latencia OCR
+        time.sleep(0.3)
 
-            if pixel_font:
-                # Pixel font: escalamos x4 con Nearest Neighbor
-                scale = 4
-                processed = self._preprocess_pixel_font(image)
-            else:
-                # Fuente estándar: escala 2x si es pequeña, 1x si es grande
-                if image.width < 400 or image.height < 400:
-                    scale = 2
-                    processed = image.resize(
-                        (image.width * 2, image.height * 2),
-                        Image.Resampling.LANCZOS
-                    )
-                    processed = ImageEnhance.Contrast(processed).enhance(1.5)
-                    processed = processed.filter(ImageFilter.SHARPEN)
-                else:
-                    scale = 1
-                    processed = ImageEnhance.Contrast(image).enhance(1.5)
-                    processed = processed.filter(ImageFilter.SHARPEN)
+        # Bloques simulados proporcionales al tamaño real de la imagen
+        w, h = image.width, image.height
+        fake_blocks = [
+            {
+                'text': "Hello World (simulado)",
+                'box':  (10, 10, w - 10, max(30, h // 4)),
+                'conf': 0.98,
+            },
+            {
+                'text': "Segunda línea de texto OCR",
+                'box':  (10, h // 4 + 5, w - 10, max(60, h // 2)),
+                'conf': 0.95,
+            },
+            {
+                'text': "Tercera línea placeholder",
+                'box':  (10, h // 2 + 5, w - 10, max(90, h - 10)),
+                'conf': 0.91,
+            },
+        ]
+        full_text = "\n".join(b['text'] for b in fake_blocks)
+        print(f"[PLACEBO] extract_text_with_boxes: retornando {len(fake_blocks)} bloques, "
+              f"{len(full_text)} chars")
+        return full_text, fake_blocks
 
-            img_array = np.array(processed.convert("RGB"))
-            result = self._engine.ocr(img_array, cls=False)
-            del img_array
-            del processed
-
-            if not result or not result[0]:
-                return "", []
-
-            # Umbral adaptativo según tipo de fuente (igual que extract_text)
-            min_conf = PADDLE_MIN_CONFIDENCE_PIXEL if pixel_font else PADDLE_MIN_CONFIDENCE
-            valid = [
-                line for line in result[0]
-                if line and line[1][1] >= min_conf
-            ]
-            valid.sort(key=lambda l: l[0][0][1])
-
-            blocks = []
-            for line in valid:
-                bbox = line[0]  # [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
-                text = line[1][0]
-                conf = line[1][1]
-
-                # Dividir TODAS las coordenadas por la escala
-                # para devolverlas a la resolución original de la imagen.
-                x1 = int(bbox[0][0] / scale)
-                y1 = int(bbox[0][1] / scale)
-                x2 = int(bbox[2][0] / scale)
-                y2 = int(bbox[2][1] / scale)
-
-                blocks.append({'text': text, 'box': (x1, y1, x2, y2), 'conf': conf})
-
-            full_text = "\n".join(b['text'] for b in blocks)
-            return full_text, blocks
-
-        except Exception as e:
-            print(f"[ERROR] extract_text_with_boxes: {e}")
-            raise RuntimeError(f"Error en OCR: {e}")
-        finally:
-            import gc
-            gc.collect()
-
+    def release_engine(self):
+        print("[PLACEBO] release_engine: limpiando engine simulado...")
+        self._engine = None
+        self._current_lang = None
+        gc.collect()
+        print("[PLACEBO] release_engine: listo")
 
     def process_area(self, x1, y1, x2, y2, lang: str = None) -> str:
-        """Captura y extrae texto de un área de pantalla"""
+        print(f"[PLACEBO] process_area: ({x1},{y1})->({x2},{y2}), lang={lang}")
         screenshot = self.capture_area(x1, y1, x2, y2)
         return self.extract_text(screenshot, lang)
-# (Dependencias/Interacciones: Depende del _preprocess y del _engine. Es llamado principalmente
-#  por 'main.py' (extract_text_with_boxes) y por 'screen_capture.py' (process_area).)

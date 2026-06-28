@@ -16,8 +16,8 @@
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 import os
 import sys
-import time
 import threading
+import gc
 
 from PySide6.QtWidgets import QWidget, QApplication
 from PySide6.QtCore    import Qt, QTimer, QPoint, Signal, QObject, QRect
@@ -31,20 +31,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ==========================================================
-# BLOQUE: Señales de Comunicación (Hilos -> Qt Main Thread)
+# BLOQUE: Señales
 # ==========================================================
 class _Signals(QObject):
-    set_status_signal    = Signal(str, float)
-    set_download_signal  = Signal()
-    close_signal         = Signal()
-# (Dependencias/Interacciones: Es utilizado por la clase SplashScreen para garantizar que las actualizaciones de UI provenientes de hilos secundarios se ejecuten en el hilo principal de Qt de forma segura.)
+    set_status_signal   = Signal(str, float)
+    set_download_signal = Signal()
+    close_signal        = Signal()
 
 
 # ==========================================================
-# BLOQUE: Ventana Flotante de Animación de Cierre
+# BLOQUE: Ventana de Animación de Cierre
 # ==========================================================
 class _AnimationWindow(QWidget):
-    """Ventana pequeña que anima el icono hacia el tray"""
+    """Ventana pequeña que anima el icono hacia el tray."""
 
     def __init__(self, icon_size: int, frames_pil: list):
         super().__init__()
@@ -54,27 +53,31 @@ class _AnimationWindow(QWidget):
             Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
+        # 🆕 Destruir al cerrar para no quedar en memoria
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setFixedSize(icon_size, icon_size)
 
-        self._icon_size = icon_size
+        self._icon_size      = icon_size
         self._current_pixmap = None
+        self._frames: list[QPixmap] = []
 
-        self._frames = []
         for pil_img in frames_pil:
             try:
                 w, h = pil_img.size
                 data = pil_img.tobytes("raw", "RGBA")
-                qi   = QImage(data, w, h, QImage.Format_RGBA8888)
+                qi   = QImage(data, w, h, QImage.Format_RGBA8888).copy()
                 self._frames.append(QPixmap.fromImage(qi))
+                del data, qi
+                pil_img.close()
             except Exception as e:
-                print(f"[ERROR Splash] Fallo al procesar frame de animación: {e}")
-                self._frames.append(None)
+                print(f"[ERROR Splash] Frame inválido: {e}")
+                self._frames.append(QPixmap())  # placeholder vacío
 
         if self._frames:
             self._current_pixmap = self._frames[0]
 
     def update_frame(self, idx: int, sz: int, nx: int, ny: int, alpha: float):
-        if idx < len(self._frames) and self._frames[idx]:
+        if idx < len(self._frames) and not self._frames[idx].isNull():
             self._current_pixmap = self._frames[idx].scaled(
                 sz, sz, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
@@ -84,17 +87,25 @@ class _AnimationWindow(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        if not self._current_pixmap:
+        if not self._current_pixmap or self._current_pixmap.isNull():
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.drawPixmap(0, 0, self._current_pixmap)
         painter.end()
-# (Dependencias/Interacciones: Es instanciada y controlada por SplashScreen cuando la aplicación termina de cargar para simular que el icono "vuela" hacia la bandeja del sistema.)
+
+    def cleanup(self):
+        """Libera todos los QPixmaps internos antes de cerrar."""
+        self._current_pixmap = None
+        # Reemplazar cada entrada con pixmap vacío para que Qt libere el buffer
+        for i in range(len(self._frames)):
+            self._frames[i] = QPixmap()
+        self._frames.clear()
+        gc.collect()
 
 
 # ==========================================================
-# BLOQUE: SplashScreen Principal (UI, Carga y API)
+# BLOQUE: SplashScreen Principal
 # ==========================================================
 class SplashScreen(QWidget):
     WIDTH  = 480
@@ -109,9 +120,11 @@ class SplashScreen(QWidget):
         for i in range(steps + 1):
             t  = (i / steps) ** 2
             sz = max(4, int(icon_size * (1 - t)))
-            img.resize((sz, sz), Image.Resampling.LANCZOS).save(
-                os.path.join(output_dir, f"frame_{i:03d}.png")
-            )
+            frame = img.resize((sz, sz), Image.Resampling.LANCZOS)
+            frame.save(os.path.join(output_dir, f"frame_{i:03d}.png"))
+            frame.close()
+            del frame
+        img.close()
         print(f"[Splash] {steps + 1} frames guardados en {output_dir}")
 
     def __init__(self):
@@ -125,33 +138,34 @@ class SplashScreen(QWidget):
         self._subtitle = "Captura  .  Reconoce  .  Traduce"
         self._drag_pos = QPoint()
 
-        # Señales
+        # Referencias que se limpiarán al cerrar
+        self._anim_win:   _AnimationWindow | None = None
+        self._anim_timer: QTimer | None           = None
+
         self._sig = _Signals()
         self._sig.set_status_signal.connect(self._do_set_status)
         self._sig.set_download_signal.connect(self._do_set_download)
         self._sig.close_signal.connect(self._do_close)
 
-        # Cargar icono PIL
         self._icon_pixmap = self._load_icon_pixmap(64)
 
-        # Ventana sin decoraciones, siempre encima, no en taskbar
         self.setWindowFlags(
             Qt.FramelessWindowHint |
             Qt.WindowStaysOnTopHint |
             Qt.Tool
         )
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(self.WIDTH, self.HEIGHT)
 
-        # Centrar en pantalla
         screen = self._app.primaryScreen().geometry()
         self.move(
             (screen.width()  - self.WIDTH)  // 2,
             (screen.height() - self.HEIGHT) // 2
         )
 
-    # ── API pública ──────────────────────────────────────────────────────── #
 
+    # ── API pública ──────────────────────────────────────────
     def set_status(self, text: str, progress: float = None):
         if self._closed:
             return
@@ -177,12 +191,9 @@ class SplashScreen(QWidget):
                 print(f"[ERROR] Splash: {e}")
                 self.close()
         threading.Thread(target=_worker, daemon=True).start()
-# (Dependencias/Interacciones: Depende de _Signals. Es llamada por 'main.py' para mostrar el progreso de carga de modelos PaddleOCR y de la interfaz principal.)
 
 
-# ==========================================================
-# BLOQUE: Slots de Actualización (Hilo Principal Qt)
-# ==========================================================
+    # ── Slots Qt (hilo principal) ────────────────────────────
     def _do_set_status(self, text: str, progress: float):
         self._status   = text
         self._progress = progress
@@ -195,7 +206,11 @@ class SplashScreen(QWidget):
 
     def _do_close(self):
         self.hide()
-        # Lanzar animación via QTimer en el hilo principal
+
+        # 🆕 Liberar icono del splash antes de la animación
+        if self._icon_pixmap is not None:
+            self._icon_pixmap = None
+
         self._anim_step  = 0
         self._anim_steps = 20
         self._anim_delay = 15
@@ -204,8 +219,14 @@ class SplashScreen(QWidget):
         cx = self.x() + self.WIDTH  // 2
         cy = self.y() + self.HEIGHT // 2
 
+        # Cargar frames — se liberan dentro de _AnimationWindow.__init__
         frames_pil = self._load_animation_frames(icon_size, self._anim_steps)
+
         self._anim_win = _AnimationWindow(icon_size, frames_pil)
+        # frames_pil ya fue consumida por _AnimationWindow, liberar lista
+        del frames_pil
+        gc.collect()
+
         self._anim_win.move(cx - icon_size // 2, cy - icon_size // 2)
         self._anim_win.show()
 
@@ -233,30 +254,40 @@ class SplashScreen(QWidget):
             if self._anim_win:
                 self._anim_win.update_frame(i, sz, nx, ny, alpha)
         except Exception as e:
-            print(f"[ERROR Splash] Falló animación de cierre: {e}")
+            print(f"[ERROR Splash] Falló frame de animación: {e}")
 
         self._anim_step += 1
 
         if self._anim_step > steps:
             self._anim_timer.stop()
-            try:
-                if self._anim_win:
+
+            # 🆕 Limpiar QPixmaps de la ventana de animación ANTES de cerrarla
+            if self._anim_win:
+                try:
+                    self._anim_win.cleanup()
                     self._anim_win.close()
-                    self._anim_win.deleteLater()  # Limpieza de memoria
-                    self._anim_win = None         # Limpieza de referencia
+                    self._anim_win.deleteLater()
+                except Exception:
+                    pass
+                self._anim_win = None
+
+            # 🆕 Limpiar timer
+            try:
+                self._anim_timer.deleteLater()
             except Exception:
                 pass
-# (Dependencias/Interacciones: Depende de _AnimationWindow. Estos métodos son disparados por las señales de _Signals o por el QTimer interno. Modifican el estado visual del Splash y preparan su cierre.)
+            self._anim_timer = None
+
+            # 🆕 GC antes de destruir el splash
+            gc.collect()
+            self.deleteLater()
 
 
-# ==========================================================
-# BLOQUE: Pintado de UI y Eventos de Mouse (Drag)
-# ==========================================================
+    # ── Pintado ──────────────────────────────────────────────
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # 1. Fondo con gradiente
         grad = QLinearGradient(0, 0, self.WIDTH, self.HEIGHT)
         grad.setColorAt(0.0, QColor(5,  51,  222))
         grad.setColorAt(0.5, QColor(13, 124, 242))
@@ -265,41 +296,33 @@ class SplashScreen(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(0, 0, self.WIDTH, self.HEIGHT, 12, 12)
 
-        # 2. Icono
         if self._icon_pixmap:
             ix = (self.WIDTH - 64) // 2
             painter.drawPixmap(ix, 16, self._icon_pixmap)
 
-        # 3. Título
         painter.setPen(QColor("#ffffff"))
         painter.setFont(QFont("Segoe UI", 22, QFont.Bold))
         painter.drawText(QRect(0, 96, self.WIDTH, 30), Qt.AlignCenter, self._title)
 
-        # 4. Subtítulo
         painter.setPen(QColor("#cce8ff"))
         painter.setFont(QFont("Segoe UI", 10))
         painter.drawText(QRect(0, 124, self.WIDTH, 20), Qt.AlignCenter, self._subtitle)
 
-        # 5. Línea separadora
         painter.setPen(QPen(QColor("#4a7fc1"), 1))
         painter.drawLine(60, 148, self.WIDTH - 60, 148)
 
-        # 6. Status text
         painter.setPen(QColor("#cce8ff"))
         painter.setFont(QFont("Segoe UI", 9))
         painter.drawText(QRect(0, 162, self.WIDTH, 20), Qt.AlignCenter, self._status)
 
-        # 7. Barra de progreso con esquinas redondeadas
         bx, by, bw, bh, br = 60, 187, self.WIDTH - 120, 12, 6
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor("#1a5cb8"))
         painter.drawRoundedRect(bx, by, bw, bh, br, br)
-
         fill_w = max(br * 2, int(bw * self._progress))
         painter.setBrush(QColor("#0daaf7"))
         painter.drawRoundedRect(bx, by, fill_w, bh, br, br)
 
-        # 8. Footer
         painter.setPen(QColor("#7ab3e0"))
         painter.setFont(QFont("Segoe UI", 8))
         painter.drawText(
@@ -307,7 +330,6 @@ class SplashScreen(QWidget):
             Qt.AlignCenter,
             "v1.1.0  -  PaddleOCR  -  Google Translate"
         )
-
         painter.end()
 
     def mousePressEvent(self, event):
@@ -317,33 +339,37 @@ class SplashScreen(QWidget):
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
-# (Dependencias/Interacciones: Depende de la variable _progress y _title actualizadas por el bloque de Slots. El evento de mouse permite mover la ventana sin barra de título.)
 
 
-# ==========================================================
-# BLOQUE: Helpers (Carga de Iconos y Frames)
-# ==========================================================
-    def _load_icon_pixmap(self, size: int):
+    # ── Helpers ──────────────────────────────────────────────
+    def _load_icon_pixmap(self, size: int) -> QPixmap | None:
         try:
             base = sys._MEIPASS
         except AttributeError:
             base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        for name in ["resources/icon.ico"]:
-            p = os.path.join(base, name)
-            if os.path.exists(p):
-                try:
-                    img = Image.open(p).convert("RGBA").resize(
-                        (size, size), Image.Resampling.LANCZOS
-                    )
-                    data    = img.tobytes("raw", "RGBA")
-                    q_image = QImage(data, size, size, QImage.Format_RGBA8888)
-                    return QPixmap.fromImage(q_image)
-                except Exception as e:
-                    print(f"[ERROR Splash] No se pudo cargar el icono {p}: {e}")
-        return None
+        path = os.path.join(base, "resources", "icon.ico")
+        if not os.path.exists(path):
+            return None
+        try:
+            img     = Image.open(path).convert("RGBA").resize(
+                (size, size), Image.Resampling.LANCZOS
+            )
+            data    = img.tobytes("raw", "RGBA")
+            q_image = QImage(data, size, size, QImage.Format_RGBA8888).copy()
+            pixmap  = QPixmap.fromImage(q_image)
+            del data, q_image
+            img.close()
+            return pixmap
+        except Exception as e:
+            print(f"[ERROR Splash] No se pudo cargar el icono: {e}")
+            return None
 
-    def _load_animation_frames(self, icon_size: int, steps: int):
+    def _load_animation_frames(self, icon_size: int, steps: int) -> list:
+        """
+        Carga frames uno a uno y los devuelve como lista de PIL Images.
+        _AnimationWindow los convierte a QPixmap y cierra cada PIL Image.
+        """
         try:
             base = sys._MEIPASS
         except AttributeError:
@@ -352,6 +378,7 @@ class SplashScreen(QWidget):
         frames_dir = os.path.join(base, "resources", "splash_frames")
         frames_pil = []
 
+        # Opción 1: leer desde disco (frames pre-generados)
         if os.path.isdir(frames_dir):
             try:
                 for i in range(steps + 1):
@@ -359,20 +386,35 @@ class SplashScreen(QWidget):
                     frames_pil.append(Image.open(p).convert("RGBA"))
                 return frames_pil
             except Exception as e:
-                print(f"[ERROR Splash] Falló al leer frames de disco: {e}")
+                print(f"[ERROR Splash] Falló lectura de frames: {e}")
+                # Cerrar los que se hayan abierto antes del fallo
+                for f in frames_pil:
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
                 frames_pil = []
 
-        for name in ["resources/icon.ico"]:
-            path = os.path.join(base, name)
-            if os.path.exists(path):
+        # Opción 2: generar desde el .ico en memoria
+        path = os.path.join(base, "resources", "icon.ico")
+        if not os.path.exists(path):
+            return []
+        try:
+            src = Image.open(path).convert("RGBA")
+            for i in range(steps + 1):
+                t     = (i / steps) ** 2
+                sz    = max(4, int(icon_size * (1 - t)))
+                frame = src.resize((sz, sz), Image.Resampling.LANCZOS)
+                frames_pil.append(frame)
+                # 🆕 No cerrar frame aquí — _AnimationWindow lo cerrará
+            src.close()
+            del src
+            return frames_pil
+        except Exception as e:
+            print(f"[ERROR Splash] Falló generación de frames: {e}")
+            for f in frames_pil:
                 try:
-                    src = Image.open(path).convert("RGBA")
-                    for i in range(steps + 1):
-                        t  = (i / steps) ** 2
-                        sz = max(4, int(icon_size * (1 - t)))
-                        frames_pil.append(src.resize((sz, sz), Image.Resampling.LANCZOS))
-                    return frames_pil
-                except Exception as e:
-                    print(f"[ERROR Splash] Falló al generar frames desde {path}: {e}")
-        return []
-# (Dependencias/Interacciones: Depende de la librería PIL y de los archivos físicos en la carpeta 'resources'. Suministra las imágenes a _AnimationWindow y al paintEvent de SplashScreen.)
+                    f.close()
+                except Exception:
+                    pass
+            return []
