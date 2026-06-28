@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
-
+from collections import OrderedDict
 import re
 
 from preferences import (
@@ -32,7 +32,8 @@ class Translator:
     """Motor de traducción usando Google Translate gratuito."""
 
     def __init__(self) -> None:
-        self._cache: dict[str, str] = {}
+        self._cache: OrderedDict[str, str] = OrderedDict()
+        self._cache_max = 100
         print("[OK] Traductor listo.")
 
     def clear_cache(self) -> None:
@@ -62,7 +63,13 @@ class Translator:
             return self._cache[cache_key]
 
         try:
-            translator = GoogleTranslator(source=source, target=target)
+            if not hasattr(self, '_gt_instance') or \
+            self._gt_source != source or self._gt_target != target:
+                self._gt_instance = GoogleTranslator(source=source, target=target)
+                self._gt_source   = source
+                self._gt_target   = target
+
+            translator = self._gt_instance
 
             if len(text) > max_chars:
                 chunks = [
@@ -77,6 +84,8 @@ class Translator:
             #print(f"[TRANSLATE] Resultado ({source}→{target}):\n{'-'*40}\n{translated}\n{'-'*40}")
 
             if cache_enabled:
+                if len(self._cache) >= self._cache_max:
+                    self._cache.popitem(last=False)
                 self._cache[cache_key] = translated
 
             return translated
