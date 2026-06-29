@@ -58,7 +58,7 @@ class ZoomableImageLabel(QLabel):
     def clearPixmaps(self):
         """Libera todos los pixmaps internos. Llamar antes de deleteLater()."""
         self._pixmap_original = None
-        super().setPixmap(QPixmap())  # pixmap vacío
+        super().setPixmap(QPixmap())
 
     def wheelEvent(self, event: QWheelEvent):
         if not self._pixmap_original:
@@ -108,7 +108,6 @@ class ZoomableImageLabel(QLabel):
         painter.end()
         del scaled
         super().setPixmap(canvas)
-        # canvas queda en QLabel, su ciclo de vida lo maneja Qt
 
 
 # ==========================================================
@@ -124,6 +123,27 @@ class _Signals(QObject):
 
 
 # ==========================================================
+# BLOQUE: _ResultWidget — QWidget subclaseado para closeEvent real
+# ==========================================================
+class _ResultWidget(QWidget):
+    """
+    QWidget que sobreescribe closeEvent correctamente vía subclase,
+    no monkey-patch. Garantiza que _hard_destroy() siempre se ejecute
+    sin importar cómo se cierre la ventana (X, Cerrar, Alt+F4, etc.).
+    """
+    def __init__(self, owner: "UnifiedResultWindow"):
+        super().__init__()
+        self._owner = owner
+
+    def closeEvent(self, event):
+        # Llamar destrucción determinista del owner antes de aceptar
+        if self._owner is not None:
+            self._owner._hard_destroy()
+            self._owner = None  # romper referencia circular
+        event.accept()
+
+
+# ==========================================================
 # BLOQUE: Ventana Unificada
 # ==========================================================
 class UnifiedResultWindow:
@@ -135,7 +155,7 @@ class UnifiedResultWindow:
         self.x2        = x2
         self.y2        = y2
         self.margin    = margin
-        self.window    = None
+        self.window: _ResultWidget | None = None
         self.is_closed = False
         self._image    = None
         self._blocks   = None
@@ -148,11 +168,74 @@ class UnifiedResultWindow:
 
 
     # ==========================================================
+    # BLOQUE: Destrucción determinista (ephemeral engine)
+    # ==========================================================
+    def _hard_destroy(self):
+        """
+        Libera TODOS los recursos en orden seguro.
+        Se ejecuta siempre — tanto desde close() como desde closeEvent
+        (X del título, Alt+F4, etc.). Idempotente: seguro llamar dos veces.
+        """
+        if self.is_closed:
+            return
+        self.is_closed = True
+
+        # 1. Desconectar signals antes de nullear para evitar
+        #    callbacks disparándose durante la destrucción
+        if self._signals is not None:
+            try:
+                self._signals.update_status.disconnect()
+                self._signals.show_result.disconnect()
+                self._signals.close_window.disconnect()
+            except Exception:
+                pass
+            self._signals = None
+
+        # 2. ZoomableImageLabel: limpiar pixmaps internos antes de deleteLater
+        if self._zoom_label is not None:
+            try:
+                self._zoom_label.clearPixmaps()
+                self._zoom_label.deleteLater()
+            except Exception:
+                pass
+            self._zoom_label = None
+
+        # 3. QPixmaps del toggle antes/después (~1-2MB cada uno)
+        self._pixmap_before = None
+        self._pixmap_after  = None
+
+        # 4. Imagen PIL (el crop original — puede ser varios MB)
+        if self._image is not None:
+            try:
+                self._image.close()
+            except Exception:
+                pass
+            self._image = None
+
+        # 5. Limpiar referencias restantes
+        self._blocks     = None
+        self._toggle_btn = None
+
+        # 6. Limpiar widgets del layout
+        if hasattr(self, '_layout') and self._layout is not None:
+            while self._layout.count():
+                item = self._layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+
+        # 7. GC para liberar arrays numpy y buffers PIL rezagados
+        gc.collect()
+
+
+    # ==========================================================
     # BLOQUE: API Pública
     # ==========================================================
     def show_loading(self):
         self.width = min(max(self.x2 - self.x1, 320), 500)
-        self.window = QWidget()
+
+        # _ResultWidget en lugar de QWidget — closeEvent vía subclase
+        self.window = _ResultWidget(owner=self)
         self._signals = _Signals(self.window)
         self._signals.update_status.connect(self._do_update_status)
         self._signals.show_result.connect(self._do_show_result)
@@ -175,21 +258,20 @@ class UnifiedResultWindow:
         self._layout.setSpacing(10)
 
         self._show_loading_content()
-        self.window.closeEvent = self._on_close_event
         return self.window
 
     def update_status(self, message):
-        if self._signals:
+        if self._signals and not self.is_closed:
             self._signals.update_status.emit(message)
 
     def show_result(self, translated_text, image=None, blocks=None):
         self._image  = image
         self._blocks = blocks
-        if self._signals:
+        if self._signals and not self.is_closed:
             self._signals.show_result.emit(translated_text)
 
     def close_after(self, ms: int):
-        if self._signals:
+        if self._signals and not self.is_closed:
             self._signals.close_window.emit(ms)
 
     def _delayed_close(self, ms: int):
@@ -198,11 +280,12 @@ class UnifiedResultWindow:
     def close(self):
         if self.is_closed or not self.window:
             return
-        self.is_closed = True
+        # _hard_destroy se ejecuta dentro de _ResultWidget.closeEvent
+        # solo necesitamos disparar el cierre Qt
         try:
             self.window.close()
         except Exception:
-            pass
+            self._hard_destroy()  # fallback si window ya no existe
 
     def run(self):
         if self.window and not self.is_closed:
@@ -223,7 +306,6 @@ class UnifiedResultWindow:
 
         self.window.setVisible(False)
 
-        # Limpiar widgets anteriores del layout
         while self._layout.count():
             item = self._layout.takeAt(0)
             w = item.widget()
@@ -237,7 +319,7 @@ class UnifiedResultWindow:
 
 
     # ==========================================================
-    # BLOQUE: Helpers de imagen
+    # BLOQUE: Helpers de imagen (sin cambios)
     # ==========================================================
     @staticmethod
     def _dominant_text_color_from_array(img_array: np.ndarray, bx1, by1, bx2, by2) -> QColor:
@@ -263,11 +345,10 @@ class UnifiedResultWindow:
 
     @staticmethod
     def _pil_to_pixmap(image: Image.Image) -> QPixmap:
-        """Convierte PIL Image a QPixmap con deep copy del buffer."""
         rgba = image.convert("RGBA")
         data = rgba.tobytes("raw", "RGBA")
         qimg = QImage(data, rgba.width, rgba.height, rgba.width * 4,
-                      QImage.Format_RGBA8888).copy()  # .copy() = deep copy
+                      QImage.Format_RGBA8888).copy()
         pixmap = QPixmap.fromImage(qimg)
         del data, qimg, rgba
         return pixmap
@@ -280,18 +361,9 @@ class UnifiedResultWindow:
         del resized
         return px
 
-    def _build_translated_pixmap(
-        self,
-        image: Image.Image,
-        blocks: list,
-        translated_lines: list[str],
-        disp_w: int,
-        disp_h: int,
-        scale_factor: float,
-    ) -> QPixmap:
+    def _build_translated_pixmap(self, image, blocks, translated_lines, disp_w, disp_h, scale_factor):
         img_w, img_h = image.size
 
-        # ── Difuminar regiones de texto ──────────────────────
         blurred = image.copy()
         for block in blocks:
             bx1, by1, bx2, by2 = block["box"]
@@ -316,8 +388,6 @@ class UnifiedResultWindow:
         blurred_resized.close()
         del blurred_resized
 
-        # ── Dibujar texto traducido encima ───────────────────
-        # Array numpy solo para detección de color — se libera al terminar el bloque
         img_array = np.array(image.convert("RGB"))
 
         painter = QPainter(pixmap)
@@ -349,16 +419,13 @@ class UnifiedResultWindow:
                              Qt.AlignVCenter | Qt.AlignLeft, text)
 
         painter.end()
-
-        # Liberar array numpy — ya no se necesita
         del img_array
         gc.collect()
-
         return pixmap
 
 
     # ==========================================================
-    # BLOQUE: Toggle antes/después
+    # BLOQUE: Toggle antes/después (sin cambios)
     # ==========================================================
     def _toggle_view(self):
         self._showing_after = not self._showing_after
@@ -366,7 +433,6 @@ class UnifiedResultWindow:
             self._zoom_label.setSourcePixmap(self._pixmap_after)
             self._toggle_btn.setText("Ver original")
         else:
-            # Construir pixmap "before" bajo demanda (no ocupar memoria si nunca se usa)
             if self._pixmap_before is None and self._image is not None:
                 img_w, img_h = self._image.size
                 max_w = 800
@@ -383,7 +449,7 @@ class UnifiedResultWindow:
 
 
     # ==========================================================
-    # BLOQUE: Renderizado de contenido
+    # BLOQUE: Renderizado de contenido (sin cambios)
     # ==========================================================
     def _show_loading_content(self):
         self._layout.setContentsMargins(24, 20, 24, 20)
@@ -412,15 +478,8 @@ class UnifiedResultWindow:
         self._progress.setRange(0, 0)
         self._progress.setFixedHeight(3)
         self._progress.setStyleSheet("""
-            QProgressBar {
-                background-color: #333333;
-                border: none;
-                border-radius: 2px;
-            }
-            QProgressBar::chunk {
-                background-color: #0078d4;
-                border-radius: 2px;
-            }
+            QProgressBar { background-color: #333333; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background-color: #0078d4; border-radius: 2px; }
         """)
         self._layout.addWidget(self._progress)
 
@@ -464,14 +523,12 @@ class UnifiedResultWindow:
             scale_factor     = disp_w / img_w
             translated_lines = [l for l in translated_text.split('\n') if l.strip()]
 
-            # Limpiar pixmaps previos antes de construir los nuevos
             self._pixmap_after  = None
             self._pixmap_before = None
 
             self._pixmap_after = self._build_translated_pixmap(
                 image, blocks, translated_lines, disp_w, disp_h, scale_factor
             )
-            # _pixmap_before se crea bajo demanda en _toggle_view
 
             self._zoom_label = ZoomableImageLabel()
             self._zoom_label.setFixedSize(disp_w, disp_h)
@@ -494,20 +551,13 @@ class UnifiedResultWindow:
             canvas_label.setWordWrap(True)
             self._layout.addWidget(canvas_label)
 
-        # ── Barra de controles inferior ──────────────────────
         btn_style_secondary = """
-            QPushButton {
-                background-color: #3a3a3a; color: #e0e0e0;
-                border: 1px solid #555555; border-radius: 4px; padding: 0 12px;
-            }
+            QPushButton { background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555555; border-radius: 4px; padding: 0 12px; }
             QPushButton:hover   { background-color: #4a4a4a; }
             QPushButton:pressed { background-color: #2a2a2a; }
         """
         btn_style_primary = """
-            QPushButton {
-                background-color: #0078d4; color: white;
-                border: none; border-radius: 4px; padding: 0 16px;
-            }
+            QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 4px; padding: 0 16px; }
             QPushButton:hover   { background-color: #106ebe; }
             QPushButton:pressed { background-color: #005a9e; }
         """
@@ -548,50 +598,3 @@ class UnifiedResultWindow:
         btn_bar.addWidget(btn_close)
 
         self._layout.addLayout(btn_bar)
-
-
-    # ==========================================================
-    # BLOQUE: Cierre y Limpieza de Memoria
-    # ==========================================================
-    def _on_close_event(self, event):
-        self.is_closed = True
-
-        # 1. Limpiar ZoomableImageLabel antes de deleteLater
-        if self._zoom_label is not None:
-            try:
-                self._zoom_label.clearPixmaps()
-                self._zoom_label.deleteLater()
-            except Exception:
-                pass
-            self._zoom_label = None
-
-        # 2. Nullear pixmaps — Qt libera la memoria del QImage subyacente
-        #    cuando el último QPixmap que lo referencia desaparece
-        self._pixmap_before = None
-        self._pixmap_after  = None
-
-        # 3. Liberar imagen PIL
-        if self._image is not None:
-            try:
-                self._image.close()
-            except Exception:
-                pass
-            self._image = None
-
-        # 4. Limpiar referencias restantes
-        self._blocks     = None
-        self._toggle_btn = None
-        self._signals    = None
-
-        # 5. Limpiar widgets del layout
-        if hasattr(self, '_layout') and self._layout is not None:
-            while self._layout.count():
-                item = self._layout.takeAt(0)
-                w = item.widget()
-                if w:
-                    w.deleteLater()
-
-        # 6. GC explícito para liberar arrays numpy y buffers PIL rezagados
-        gc.collect()
-
-        event.accept()
