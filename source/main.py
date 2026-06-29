@@ -62,7 +62,7 @@ from core.ocr_engine import OCREngine
 from core.translator import Translator
 from core.screen_capture import ScreenCapture
 from core.loading_window import UnifiedResultWindow
-from ui.selection_window import SelectionWindow
+from ui.selection_window import capture_selection
 from ui.preferences_window import PreferencesWindow
 
 from concurrent.futures import ThreadPoolExecutor
@@ -351,8 +351,7 @@ class OCRTranslatorApp:
 
     def _run_selection_window(self):
         try:
-            win = SelectionWindow(self.on_area_selected)
-            win.show()  # bloquea si tiene QEventLoop interno
+            capture_selection(self.on_area_selected)  # ← una sola línea
         except Exception as e:
             print(f"[ERROR SelectionWindow] {type(e).__name__}: {e}")
         finally:
@@ -361,13 +360,17 @@ class OCRTranslatorApp:
     def on_area_selected(self, x1, y1, x2, y2, cropped_image):
         if cropped_image.width < 10 or cropped_image.height < 10:
             print("[WARN] Área muy pequeña")
+            # 🆕 liberar imagen si se descarta
+            try:
+                cropped_image.close()
+            except Exception:
+                pass
             return
 
         print(f"[*] Área seleccionada: ({x1},{y1}) -> ({x2},{y2})")
-        QTimer.singleShot(
-            50,
-            lambda: self._signals.area_selected.emit(x1, y1, x2, y2, cropped_image),
-        )
+        # 🆕 pasar la imagen directamente sin lambda que la capture en closure
+        self._signals.area_selected.emit(x1, y1, x2, y2, cropped_image)
+
 
     def _run_result_window(self, x1, y1, x2, y2, cropped_image):
         if self._active_result and not self._active_result.is_closed:
@@ -380,11 +383,9 @@ class OCRTranslatorApp:
         result_window.show_loading()
 
         def process():
-            # 🆕 Trabajar con una copia local y liberar la referencia externa
-            _img = cropped_image
             try:
                 result_window.update_status("Extrayendo texto...")
-                original_text, blocks = self.ocr_engine.extract_text_with_boxes(_img)
+                original_text, blocks = self.ocr_engine.extract_text_with_boxes(cropped_image)
 
                 if not original_text:
                     result_window.update_status("No se detectó texto")
@@ -398,30 +399,23 @@ class OCRTranslatorApp:
                     f"Traduciendo ({len(original_text)} caracteres)..."
                 )
                 translated_text = self.translator.translate(original_text)
-                
-                # 🆕 Crear una copia de la imagen para la ventana (más pequeña)
-                # para no mantener la original grande en memoria
-                display_img = _img.copy()
-                
-                result_window.show_result(translated_text, display_img, blocks)
-                
+
+                # 🆕 pasar cropped_image directamente — UnifiedResultWindow
+                # es dueña de la imagen a partir de aquí y la cierra en _hard_destroy()
+                result_window.show_result(translated_text, cropped_image, blocks)
+
             except Exception as e:
                 print(f"[ERROR] {type(e).__name__}: {e}")
+                # 🆕 si hay error, la ventana no tomó la imagen — cerrarla aquí
+                try:
+                    cropped_image.close()
+                except Exception:
+                    pass
                 result_window.close_after(3000)
+
             finally:
-                # 🆕 Liberar referencias
-                _img = None
-                
-                # 🆕 Programar liberación del wrapper Python tras un delay
-                # para dar tiempo a Qt a destruir el QWidget
-                def _cleanup_wrapper():
-                    if self._active_result is result_window:
-                        self._active_result = None
-                    # 🆕 Forzar GC solo aquí, no en cada OCR
-                    import gc
-                    gc.collect()
-                
-                QTimer.singleShot(100, _cleanup_wrapper)
+                import gc
+                gc.collect()
 
         self.capturing = False
         self._ocr_executor.submit(process)
@@ -430,9 +424,25 @@ class OCRTranslatorApp:
     # ==========================================================
     # BLOQUE: System Tray (Bandeja del Sistema)
     # ==========================================================
+    def _on_model_download_finished(self, lang: str):
+        print(f"[OCR] Modelo '{lang}' descargado correctamente.")
+        # El modelo ya está cargado en el Singleton por init_engine_for_download
+        # Hacemos un warmup para asegurar que todo está listo
+        try:
+            self._warmup_ocr()
+        except Exception as e:
+            print(f"[ERROR] No se pudo calentar el nuevo OCR engine: {e}")
+
     def on_quit(self, icon, item):
         print("[PREF] on_quit llamado desde tray")
         self.running = False
+        
+        # Limpiar el motor OCR correctamente antes de morir
+        try:
+            if self.ocr_engine:
+                self.ocr_engine.release_engine()
+        except:
+            pass
         
         # Primero forzar salida en hilo separado por si icon.stop() bloquea
         def _force_exit():
@@ -527,6 +537,8 @@ class OCRTranslatorApp:
         dlg = QDialog()
         dlg.setWindowTitle(ABOUT_TITLE)
         dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+        # 🆕 evita que cerrar este diálogo termine el event loop de Qt
+        dlg.setAttribute(Qt.WA_QuitOnClose, False)
         dlg.setWindowFlags(Qt.Window)
         dlg.setMinimumWidth(320)
 
@@ -593,15 +605,9 @@ class OCRTranslatorApp:
                 splash.set_download_mode()
                 splash.set_status(f"Descargando modelo '{new_lang}'...", 0.10)
                 with ProgressCapture(splash, "Descargando", 0.10, 0.90):
-                    paddle_lang = self.ocr_engine._get_paddle_lang(new_lang)
-                    from paddleocr import PaddleOCR as _POCR
-                    _tmp = _POCR(
-                        use_angle_cls=True,
-                        lang=paddle_lang,
-                        use_gpu=False,
-                        show_log=False,
-                    )
-                    del _tmp
+                    # El Singleton de OCREngine se encarga de descargar e instanciar internamente
+                    self.ocr_engine.init_engine_for_download(new_lang)
+                    
                 splash.set_status("¡Modelo listo!", 1.0)
                 import time
                 time.sleep(0.6)
@@ -616,10 +622,13 @@ class OCRTranslatorApp:
 
     def _on_model_download_finished(self, lang: str):
         print(f"[OCR] Modelo '{lang}' descargado correctamente.")
+        # El modelo ya está cargado en el Singleton por init_engine_for_download
+        # Hacemos un warmup para asegurar que todo está listo
         try:
-            self.ocr_engine._init_engine(lang)
+            self._warmup_ocr()
         except Exception as e:
-            print(f"[ERROR] No se pudo recargar OCR engine: {e}")
+            print(f"[ERROR] No se pudo calentar el nuevo OCR engine: {e}")
+
 
     def _on_model_download_failed(self, lang: str):
         QMessageBox.warning(
