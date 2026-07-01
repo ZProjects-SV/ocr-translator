@@ -152,15 +152,16 @@ class _SelectionWindow(QWidget):
     # BLOQUE: Captura de pantalla
     # ==========================================================
     def _capture_screenshot(self):
+        from PySide6.QtGui import QImage
+
         screen = QApplication.primaryScreen()
 
         # Capturar como QPixmap (se reutiliza en paintEvent)
         self._pixmap = screen.grabWindow(0)
 
-        # Convertir a PIL para el crop posterior
-        q_img = self._pixmap.toImage().convertToFormat(
-            QPixmap.toImage(self._pixmap).Format.Format_RGBA8888
-        )
+        # Convertir una sola vez al formato correcto
+        q_img = self._pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+
         width  = q_img.width()
         height = q_img.height()
         ptr    = q_img.bits()
@@ -169,7 +170,6 @@ class _SelectionWindow(QWidget):
             "RGBA", (width, height), ptr, "raw", "RGBA"
         ).convert("RGB")
 
-        # Liberar QImage intermedio inmediatamente
         del q_img
         gc.collect()
 
