@@ -30,9 +30,9 @@ from preferences import (
 # BLOQUE: Motor de Traducción — Ephemeral sin caché
 # ==========================================================
 class Translator:
-    """Motor de traducción usando Google Translate gratuito. 
+    """Motor de traducción usando Google Translate gratuito.
     Patrón efímero estricto: Instanciar -> Procesar -> Destruir -> Limpiar memoria."""
-    
+
     def __init__(self) -> None:
         print("[OK] Traductor listo (ephemeral, sin caché).")
 
@@ -40,21 +40,20 @@ class Translator:
         """Divide el texto respetando los espacios para no romper palabras."""
         if len(text) <= max_chars:
             return [text]
-            
+
         chunks = []
         current_chunk = ""
         for word in text.split():
-            # Si la palabra + espacio + chunk actual supera el límite, cerramos el chunk
             if len(current_chunk) + len(word) + 1 > max_chars:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                 current_chunk = word
             else:
                 current_chunk += " " + word if current_chunk else word
-                
+
         if current_chunk:
             chunks.append(current_chunk.strip())
-            
+
         return chunks
 
     def translate(self, text: str) -> str:
@@ -63,33 +62,33 @@ class Translator:
         if not text:
             return ""
 
-        # Limpiamos el texto de líneas vacías
         text = "\n".join(line for line in text.split("\n") if line.strip())
+        if not text:
+            return ""
 
-        source    = get_translation_source()
-        target    = get_translation_target()
-        max_chars = get_translation_max_chars()
+        source = get_translation_source() or "auto"
+        target = get_translation_target() or "en"
+        max_chars = get_translation_max_chars() or 4500
 
         translator = None
+        result = ""
         try:
             print(f"[TRANSLATE] Instanciando GoogleTranslator ({source}→{target})...")
             t0 = time.perf_counter()
-            
-            # --- 1. INSTANCIAR ---
+
             translator = GoogleTranslator(source=source, target=target)
 
-            # --- 2. PROCESAR ---
             chunks = self._split_text_intelligently(text, max_chars)
-            
+
             translated_chunks = []
             for chunk in chunks:
                 translated_chunks.append(translator.translate(chunk))
-                
+
             translated = " ".join(translated_chunks)
 
             elapsed = time.perf_counter() - t0
             print(f"[TRANSLATE] Completado en {elapsed:.2f}s ({len(text)}→{len(translated)} chars)")
-            
+
             result = translated
 
         except Exception as e:
@@ -97,18 +96,10 @@ class Translator:
             result = f"Error de traducción: {e}"
 
         finally:
-            # --- 3. DESTRUIR Y LIMPIAR (El corazón del motor efímero) ---
             if translator is not None:
                 del translator
-                translator = None  # Aseguramos que la referencia se pierda
-            
-            # Forzamos al recolector de basura de Python a liberar la memoria RAM
-            # de las sesiones HTTP subyacentes inmediatamente.
+                translator = None
             gc.collect()
             print("[TRANSLATE] GoogleTranslator destruido y memoria liberada (gc.collect).")
 
-        # Devolvemos el resultado FUERA del try/except para asegurar que 
-        # el finally siempre se ejecute antes de retornar.
         return result
-# (Dependencias/Interacciones: Depende de 'preferences' en tiempo real y de 'deep_translator'.
-#  Es instanciado por 'main.py' y su método 'translate' es llamado en el hilo de procesamiento.)

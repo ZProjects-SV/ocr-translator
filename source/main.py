@@ -249,17 +249,17 @@ class OCRTranslatorApp:
             splash.set_status("Descargando modelos... (primera vez)", 0.10)
             try:
                 with ProgressCapture(splash, "Descargando", 0.10, 0.70):
-                    self.ocr_engine = OCREngine()
+                    self.ocr_engine = OCREngine()  # La instanciación descarga el modelo
             except Exception:
-                sys.stderr = sys.__stderr__  # Reset de emergencia si falla OCREngine
+                sys.stderr = sys.__stderr__
                 raise
         else:
             splash.set_status("Cargando motor OCR...", 0.20)
             try:
                 with ProgressCapture(splash, "Cargando", 0.20, 0.60):
-                    self.ocr_engine = OCREngine()
+                    self.ocr_engine = OCREngine()  # Carga el engine en RAM directamente
             except Exception:
-                sys.stderr = sys.__stderr__  # Reset de emergencia si falla OCREngine
+                sys.stderr = sys.__stderr__
                 raise
 
         splash.set_status("Calentando modelo...", 0.75)
@@ -385,7 +385,7 @@ class OCRTranslatorApp:
         def process():
             try:
                 result_window.update_status("Extrayendo texto...")
-                original_text, blocks = self.ocr_engine.extract_text_with_boxes(cropped_image)
+                original_text, blocks = self.ocr_engine.extract_text_with_boxes(cropped_image, save_debug=False)
 
                 if not original_text:
                     result_window.update_status("No se detectó texto")

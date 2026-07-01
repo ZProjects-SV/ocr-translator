@@ -17,6 +17,7 @@
 import os
 import sys
 import gc
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -49,13 +50,39 @@ def _is_pixel_font(image: Image.Image) -> bool:
 
 
 # ==========================================================
-# BLOQUE: Clase Principal — Ephemeral Engine
+# BLOQUE: Helper — normaliza resultado de .predict() a lista de bloques
+# ==========================================================
+def _parse_predict_result(result, min_conf: float):
+    """
+    PaddleOCR 3.x .predict() devuelve una lista de objetos (uno por imagen),
+    cada uno accesible como dict con: rec_texts, rec_scores, rec_polys (o rec_boxes).
+    Esta función lo normaliza a: [{'text':..., 'score':..., 'poly':...}, ...]
+    """
+    if not result:
+        return []
+
+    res = result[0]  # una sola imagen -> un solo resultado
+
+    texts = res.get("rec_texts", [])
+    scores = res.get("rec_scores", [])
+    polys = res.get("rec_polys", res.get("rec_boxes", [None] * len(texts)))
+
+    blocks = []
+    for text, score, poly in zip(texts, scores, polys):
+        if not text or score is None or score < min_conf:
+            continue
+        blocks.append({"text": text, "score": float(score), "poly": poly})
+
+    return blocks
+
+
+# ==========================================================
+# BLOQUE: Clase Principal — OCREngine (instancia persistente)
 # ==========================================================
 class OCREngine:
     """
-    Motor OCR con patrón ephemeral: PaddleOCR se instancia justo antes
-    de procesar y se destruye completamente al terminar.
-    Memoria ocupada solo durante el procesamiento, ~0 en reposo.
+    Motor OCR con instancia persistente de PaddleOCR 3.x.
+    Se carga una vez al iniciar y se reutiliza en cada captura.
     """
 
     _downloaded_langs: set = set()
@@ -70,13 +97,14 @@ class OCREngine:
         return source_lang in cls._downloaded_langs
 
     def __init__(self):
-        print("[OCR] OCREngine.__init__: modo ephemeral activado")
-        # Sin engine en memoria — solo restaurar lista de idiomas descargados
+        print("[OCR] OCREngine.__init__: iniciando...")
         OCREngine._downloaded_langs.update(get_downloaded_langs())
-        # Verificar que los modelos existen en disco (sin cargarlos)
+        self._engine = None
+        self._current_lang = None
+
         source_lang = get_translation_source() or "en"
-        OCREngine.mark_lang_downloaded(source_lang)
-        print(f"[OCR] Engine listo en reposo (lang='{source_lang}', sin modelo en RAM)")
+        self._load_engine(source_lang)
+        print(f"[OCR] Engine listo (lang='{source_lang}')")
 
     # ----------------------------------------------------------
     # Helpers de idioma
@@ -84,84 +112,57 @@ class OCREngine:
     def _get_paddle_lang(self, source_lang: str) -> str:
         return TRANSLATION_TO_PADDLE_LANG.get(source_lang, PADDLE_LANG)
 
-    def _init_engine(self, source_lang: str = None) -> None:
-        """
-        Solo para descarga inicial de modelos desde PreferencesWindow.
-        No se llama en el flujo normal de captura.
-        """
+    # ----------------------------------------------------------
+    # Carga/recarga del engine
+    # ----------------------------------------------------------
+    def _load_engine(self, source_lang: str) -> None:
+        """Carga (o recarga si el idioma cambió) la instancia de PaddleOCR 3.x."""
         from paddleocr import PaddleOCR
-        source_lang = source_lang or get_translation_source() or "en"
+
         paddle_lang = self._get_paddle_lang(source_lang)
-        print(f"[OCR] _init_engine (descarga): lang='{source_lang}' -> modelo='{paddle_lang}'")
-        engine = PaddleOCR(
-            use_angle_cls=False,
+
+        if self._engine is not None and self._current_lang == source_lang:
+            return
+
+        if self._engine is not None:
+            print(f"[OCR] Recargando engine: '{self._current_lang}' -> '{source_lang}'")
+            del self._engine
+            gc.collect()
+
+        print(f"[OCR] Cargando PaddleOCR 3.x: lang='{source_lang}' (paddle='{paddle_lang}')...")
+
+        # PaddleOCR 3.x: use_angle_cls -> use_textline_orientation; use_gpu -> device
+        self._engine = PaddleOCR(
             lang=paddle_lang,
-            use_gpu=False,
-            show_log=False,
+            device="cpu",
             enable_mkldnn=False,
             cpu_threads=2,
-            det_db_thresh=0.2,
-            det_db_box_thresh=0.4,
-            det_db_unclip_ratio=1.8,
-            det_db_score_mode='slow',
-            rec_image_shape='3,48,320',
-            drop_score=0.3,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
         )
-        del engine
-        gc.collect()
+        self._current_lang = source_lang
         OCREngine.mark_lang_downloaded(source_lang)
-        print(f"[OCR] _init_engine: modelo '{source_lang}' verificado y liberado")
+        print(f"[OCR] Engine cargado correctamente (lang='{source_lang}')")
 
-    # ----------------------------------------------------------
-    # Core privado: crear engine, usarlo, destruirlo
-    # ----------------------------------------------------------
-    def _build_ephemeral_engine(self, source_lang: str):
-        """Crea una instancia temporal de PaddleOCR. Debe destruirse tras cada uso."""
-        from paddleocr import PaddleOCR
-        import time
-        paddle_lang = self._get_paddle_lang(source_lang)
-        print(f"[OCR] _build_ephemeral_engine: instanciando para lang='{source_lang}' (paddle='{paddle_lang}')...")
-        t0 = time.perf_counter()
-        engine = PaddleOCR(
-            use_angle_cls=False,
-            lang=paddle_lang,
-            use_gpu=False,
-            show_log=False,
-            enable_mkldnn=False,
-            cpu_threads=2,
-            det_db_thresh=0.2,
-            det_db_box_thresh=0.4,
-            det_db_unclip_ratio=1.8,
-            det_db_score_mode='slow',
-            rec_image_shape='3,48,320',
-            drop_score=0.3,
-        )
-        print(f"[OCR] _build_ephemeral_engine: listo en {time.perf_counter()-t0:.2f}s")
-        return engine
+    def _init_engine(self, source_lang: str = None) -> None:
+        """Para descarga inicial de modelos desde PreferencesWindow."""
+        source_lang = source_lang or get_translation_source() or "en"
+        print(f"[OCR] _init_engine (descarga/verificación): lang='{source_lang}'")
+        self._load_engine(source_lang)
+        print(f"[OCR] _init_engine: modelo '{source_lang}' verificado")
 
-    @staticmethod
-    def _destroy_engine(engine) -> None:
-        import time
-        t0 = time.perf_counter()
-        try:
-            del engine
-        except Exception:
-            pass
-
-        try:
-            import paddle.framework.core as core # type: ignore
-            # Limpia el cache del executor (buffers de inferencia)
-            core.clear_executor_cache()
-            # Limpia el kernel factory (kernels compilados cacheados)
-            core.clear_kernel_factory()
-            # Cleanup general interno de Paddle
-            core._cleanup()
-        except Exception as e:
-            print(f"[OCR] _destroy_engine: paddle cleanup parcial: {e}")
-
-        gc.collect()
-        print(f"[OCR] _destroy_engine: liberado en {time.perf_counter()-t0:.3f}s")
-
+    def release_engine(self) -> None:
+        """Libera el engine de memoria (p.ej. al cerrar PreferencesWindow)."""
+        if self._engine is not None:
+            print("[OCR] release_engine: liberando engine...")
+            del self._engine
+            self._engine = None
+            self._current_lang = None
+            gc.collect()
+            print("[OCR] release_engine: engine liberado")
+        else:
+            print("[OCR] release_engine: no hay engine activo")
 
     # ==========================================================
     # BLOQUE: Captura y Preprocesamiento
@@ -180,14 +181,14 @@ class OCREngine:
         h, w = img_cv.shape[:2]
         scale_factor = 4
         img_cv = cv2.resize(img_cv, (w * scale_factor, h * scale_factor),
-                            interpolation=cv2.INTER_NEAREST)
+                             interpolation=cv2.INTER_NEAREST)
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
         del img_cv
         _, binary_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         white_ratio = np.sum(binary_otsu == 255) / binary_otsu.size
         if white_ratio < 0.05 or white_ratio > 0.95:
             binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                           cv2.THRESH_BINARY, 15, 2)
+                                            cv2.THRESH_BINARY, 15, 2)
             print("[OCR] Pixel font: binarización adaptativa")
         else:
             binary = binary_otsu
@@ -225,114 +226,121 @@ class OCREngine:
         del rgb
         return out
 
+    # ==========================================================
+    # BLOQUE: Utilidad de Guardado para Debug
+    # ==========================================================
+    def _save_debug_images(self, original_img: Image.Image, processed_img: Image.Image, prefix: str = "ocr_debug"):
+        debug_dir = "debug_ocr"
+        os.makedirs(debug_dir, exist_ok=True)
+        timestamp = int(time.time() * 1000)
+        orig_path = os.path.join(debug_dir, f"{prefix}_1_original_{timestamp}.png")
+        proc_path = os.path.join(debug_dir, f"{prefix}_2_processed_{timestamp}.png")
+        try:
+            original_img.save(orig_path, "PNG")
+            processed_img.save(proc_path, "PNG")
+            print(f"[DEBUG] Imágenes guardadas en: {debug_dir}/")
+        except Exception as e:
+            print(f"[DEBUG] Error al guardar imágenes: {e}")
 
     # ==========================================================
-    # BLOQUE: Extracción de Texto — Patrón Ephemeral
+    # BLOQUE: Extracción de Texto
     # ==========================================================
-    def extract_text(self, image: Image.Image, lang: str = None) -> str:
-        import time
+    def extract_text(self, image: Image.Image, lang: str = None, save_debug: bool = False) -> str:
         if image.width < 10 or image.height < 10:
             return ""
 
         source_lang = lang or get_translation_source() or "en"
-        pixel_font  = _is_pixel_font(image)
-        min_conf    = PADDLE_MIN_CONFIDENCE_PIXEL if pixel_font else PADDLE_MIN_CONFIDENCE
+        pixel_font = _is_pixel_font(image)
+        min_conf = PADDLE_MIN_CONFIDENCE_PIXEL if pixel_font else PADDLE_MIN_CONFIDENCE
+
+        self._load_engine(source_lang)
 
         print(f"[OCR] extract_text: {image.width}x{image.height}, lang='{source_lang}'")
-        engine = self._build_ephemeral_engine(source_lang)
-        try:
-            processed  = self._preprocess(image)
-            img_array  = np.array(processed.convert("RGB"))
-            t0         = time.perf_counter()
-            result     = engine.ocr(img_array, cls=False)
-            print(f"[OCR] inference: {time.perf_counter()-t0:.2f}s")
-            del img_array, processed
+        processed = self._preprocess(image)
 
-            if not result or not result[0]:
-                return ""
+        if save_debug:
+            self._save_debug_images(image, processed, prefix="extract_text")
 
-            valid = [l for l in result[0] if l and l[1][1] >= min_conf]
-            valid.sort(key=lambda l: l[0][0][1])
-            text = "\n".join(l[1][0] for l in valid).strip()
-            del result, valid
-            return text
+        img_array = np.array(processed.convert("RGB"))
+        t0 = time.perf_counter()
+        result = self._engine.predict(img_array)
+        print(f"[OCR] inference: {time.perf_counter()-t0:.2f}s")
+        del img_array, processed
 
-        finally:
-            self._destroy_engine(engine)
+        blocks = _parse_predict_result(result, min_conf)
+        del result
 
-    def extract_text_with_boxes(self, image: Image.Image):
-        import time
+        if not blocks:
+            return ""
+
+        # Orden vertical aproximado usando la coordenada Y del primer punto del polígono
+        blocks.sort(key=lambda b: b["poly"][0][1] if b["poly"] is not None else 0)
+        text = "\n".join(b["text"] for b in blocks).strip()
+        return text
+
+    def extract_text_with_boxes(self, image: Image.Image, save_debug: bool = False):
         if image.width < 10 or image.height < 10:
             return "", []
 
         source_lang = get_translation_source() or "en"
-        pixel_font  = _is_pixel_font(image)
-        min_conf    = PADDLE_MIN_CONFIDENCE_PIXEL if pixel_font else PADDLE_MIN_CONFIDENCE
+        pixel_font = _is_pixel_font(image)
+        min_conf = PADDLE_MIN_CONFIDENCE_PIXEL if pixel_font else PADDLE_MIN_CONFIDENCE
 
-        # Preprocesamiento (sin engine todavía — no ocupa RAM de Paddle aún)
         if pixel_font:
-            scale     = 4
+            scale = 4
             processed = self._preprocess_pixel_font(image)
         elif image.width < 400 or image.height < 400:
-            scale     = 2
+            scale = 2
             processed = image.resize((image.width * 2, image.height * 2),
-                                     Image.Resampling.LANCZOS)
+                                      Image.Resampling.LANCZOS)
             processed = ImageEnhance.Contrast(processed).enhance(1.5)
             processed = processed.filter(ImageFilter.SHARPEN)
         else:
-            scale     = 1
+            scale = 1
             processed = ImageEnhance.Contrast(image).enhance(1.5)
             processed = processed.filter(ImageFilter.SHARPEN)
+
+        if save_debug:
+            self._save_debug_images(image, processed, prefix="extract_boxes")
 
         img_array = np.array(processed.convert("RGB"))
         processed.close()
         del processed
 
+        self._load_engine(source_lang)
+
         print(f"[OCR] extract_text_with_boxes: {image.width}x{image.height}, "
               f"lang='{source_lang}', pixel_font={pixel_font}, scale={scale}")
 
-        engine = self._build_ephemeral_engine(source_lang)
-        try:
-            t0     = time.perf_counter()
-            result = engine.ocr(img_array, cls=False)
-            print(f"[OCR] inference: {time.perf_counter()-t0:.2f}s")
-            del img_array
+        t0 = time.perf_counter()
+        result = self._engine.predict(img_array)
+        print(f"[OCR] inference: {time.perf_counter()-t0:.2f}s")
+        del img_array
 
-            if not result or not result[0]:
-                del result
-                return "", []
+        raw_blocks = _parse_predict_result(result, min_conf)
+        del result
 
-            valid = [l for l in result[0] if l and l[1][1] >= min_conf]
-            valid.sort(key=lambda l: l[0][0][1])
+        if not raw_blocks:
+            return "", []
 
-            blocks = []
-            for line in valid:
-                bbox = line[0]
-                text = line[1][0]
-                conf = line[1][1]
-                blocks.append({
-                    'text': text,
-                    'box':  (int(bbox[0][0] / scale), int(bbox[0][1] / scale),
-                             int(bbox[2][0] / scale), int(bbox[2][1] / scale)),
-                    'conf': conf,
-                })
+        raw_blocks.sort(key=lambda b: b["poly"][0][1] if b["poly"] is not None else 0)
 
-            full_text = "\n".join(b['text'] for b in blocks)
-            del result, valid
-            print(f"[OCR] resultado: {len(blocks)} bloques, {len(full_text)} chars")
-            return full_text, blocks
+        blocks = []
+        for b in raw_blocks:
+            poly = b["poly"]
+            if poly is not None:
+                xs = [p[0] for p in poly]
+                ys = [p[1] for p in poly]
+                box = (int(min(xs) / scale), int(min(ys) / scale),
+                       int(max(xs) / scale), int(max(ys) / scale))
+            else:
+                box = (0, 0, 0, 0)
+            blocks.append({"text": b["text"], "box": box, "conf": b["score"]})
 
-        finally:
-            # Siempre se destruye el engine, incluso si hay excepción
-            self._destroy_engine(engine)
-
-    def release_engine(self):
-        """
-        Compatibilidad con llamadas externas (PreferencesWindow, etc.).
-        En modo ephemeral no hay nada que liberar.
-        """
-        print("[OCR] release_engine: noop (modo ephemeral, no hay engine persistente)")
-        gc.collect()
+        full_text = "\n".join(b["text"] for b in blocks)
+        del raw_blocks
+        print(f"[OCR] resultado: {len(blocks)} bloques, {len(full_text)} chars")
+        return full_text, blocks
 
     def process_area(self, x1, y1, x2, y2, lang: str = None) -> str:
         return self.extract_text(self.capture_area(x1, y1, x2, y2), lang)

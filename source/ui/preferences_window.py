@@ -14,6 +14,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
     QLabel, QStackedWidget, QFormLayout, QLineEdit, QCheckBox,
