@@ -15,50 +15,38 @@
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from core.ocr_engine import OCREngine
-import gc
-from core.ocr_engine import OCREngine
 from core.translator import Translator
+import gc
 
 
 # ==========================================================
-# BLOQUE: Coordinador de Captura (Orquestador)
+# BLOQUE: Coordinador de Captura — Simulado
 # ==========================================================
 class ScreenCapture:
-    """Coordina la captura, OCR y traducción."""
+    """Coordina la captura, OCR y traducción (versión simulada)."""
+
+    _MOCK_ORIGINAL = "This is simulated OCR output for testing purposes."
+    _MOCK_TRANSLATED = "[Traducción simulada] This is a mock translated text for testing purposes."
 
     def __init__(self, ocr_engine: OCREngine = None, translator: Translator = None):
-        if ocr_engine is None or translator is None:
-            raise RuntimeError(
-                "ScreenCapture requiere instancias de OCREngine y Translator ya inicializadas."
-            )
+        # En modo simulado no forzamos el error para no romper la cadena de inicialización
         self.ocr_engine = ocr_engine
         self.translator = translator
 
     def process(self, x1, y1, x2, y2):
-        """Procesa un área de pantalla: captura, OCR y traducción."""
-        original_text = None
-        translated_text = None
+        """Simula el procesamiento de un área de pantalla."""
+        print(f"[ScreenCapture-MOCK] process() llamado para área ({x1}, {y1}, {y2}, {y2})")
+
         try:
-            original_text = self.ocr_engine.process_area(x1, y1, x2, y2)
-
-            if not original_text:
-                return None, "No se detectó texto en el área seleccionada"
-
-            original_text = '\n'.join(
-                line for line in original_text.split('\n') if line.strip()
-            )
+            original_text = self._MOCK_ORIGINAL
+            translated_text = self._MOCK_TRANSLATED
 
             print("=" * 60)
-            print("TEXTO ORIGINAL:")
+            print("TEXTO ORIGINAL (SIMULADO):")
             print("-" * 60)
             print(original_text)
             print("=" * 60)
-            print(f"[OK] Traduciendo... ({len(original_text)} caracteres)")
-
-            translated_text = self.translator.translate(original_text)
-
-            print("[OK] Traducción completada")
-            print("=" * 60)
+            print(f"[ScreenCapture-MOCK] Traducción simulada completada")
 
             return original_text, translated_text
 
@@ -66,7 +54,5 @@ class ScreenCapture:
             return None, f"Error: {str(e)}"
 
         finally:
-            # Liberar strings intermedios grandes si los hubiera
-            del original_text, translated_text
             gc.collect()
 # (Dependencias/Interacciones: Depende directamente de 'ocr_engine.py' y 'translator.py'. Aunque está implementado como orquestador, actualmente 'main.py' hace esta orquestación manualmente en su método _run_result_window. Esta clase se mantiene por compatibilidad o para usos futuros directos.)

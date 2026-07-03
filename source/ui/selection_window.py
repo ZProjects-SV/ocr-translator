@@ -14,10 +14,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
+
 import gc
 from PySide6.QtWidgets import QWidget, QApplication, QLabel
 from PySide6.QtCore import Qt, QRect, QEventLoop, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPainter, QColor, QPen, QCursor, QPixmap
+from PySide6.QtGui import QPainter, QColor, QPen, QCursor, QPixmap, QPixmapCache
 from PIL import Image
 
 from config import (
@@ -32,13 +33,13 @@ from preferences import (
 
 
 # ==========================================================
-# BLOQUE: Ephemeral Engine — única interfaz pública
+# BLOQUE: Ephemeral Engine -- unica interfaz publica
 # ==========================================================
 def capture_selection(on_select_callback):
     """
     Instancia SelectionWindow, ejecuta el ciclo, destruye el objeto
     y retorna. Al finalizar no quedan referencias al widget ni a sus
-    recursos internos — la próxima llamada empieza desde cero.
+    recursos internos -- la proxima llamada empieza desde cero.
 
     Uso:
         capture_selection(lambda x1, y1, x2, y2, img: procesar(img))
@@ -46,47 +47,44 @@ def capture_selection(on_select_callback):
     app = QApplication.instance() or QApplication([])
     win = _SelectionWindow(app, on_select_callback)
     try:
-        win.run()          # bloquea hasta que el usuario selecciona o cancela
+        win.run()
     finally:
-        win._hard_destroy()  # destrucción determinista, siempre se ejecuta
+        win._hard_destroy()
         gc.collect()
 
 
 # ==========================================================
-# BLOQUE: Implementación interna (no instanciar directamente)
+# BLOQUE: Implementacion interna (no instanciar directamente)
 # ==========================================================
 class _SelectionWindow(QWidget):
     """
-    Widget de selección de área. No instanciar directamente:
-    usar capture_selection() para garantizar el patrón ephemeral.
+    Widget de seleccion de area. No instanciar directamente:
+    usar capture_selection() para garantizar el patron ephemeral.
     """
 
     def __init__(self, app: QApplication, on_select_callback):
-        self._app    = app
+        self._app = app
         self.on_select = on_select_callback
         super().__init__()
 
         self.start_point = None
-        self.end_point   = None
-        self.selecting   = False
+        self.end_point = None
+        self.selecting = False
 
-        # Recursos pesados — siempre se liberan en _hard_destroy()
-        self._screenshot: Image.Image | None = None  # PIL ~3-4MB
-        self._pixmap: QPixmap | None         = None  # Qt   ~8MB
+        # Recursos pesados -- siempre se liberan en _hard_destroy()
+        self._screenshot: Image.Image | None = None  # PIL fullscreen
+        self._pixmap: QPixmap | None = None          # Qt fullscreen
 
-        self._toast      = None
+        self._toast = None
         self._toast_anim = None
         self._loop: QEventLoop | None = None
 
-        # Resultado a entregar al caller después de la destrucción
-        self._result = None   # (x1, y1, x2, y2, cropped_pil)
-
+        self._result = None  # (x1, y1, x2, y2, cropped_pil)
 
     # ==========================================================
     # BLOQUE: Ciclo principal (ephemeral engine)
     # ==========================================================
     def run(self):
-        """Configura la ventana, lanza el event loop y bloquea hasta terminar."""
         print("[*] Capturando pantalla...")
         self._capture_screenshot()
 
@@ -106,27 +104,23 @@ class _SelectionWindow(QWidget):
 
         print("[*] Listo para seleccionar")
         self._loop = QEventLoop()
-        self._loop.exec()   # ← bloquea aquí hasta que _finish() llame quit()
+        self._loop.exec()
 
-        # Entregar resultado si hubo selección válida
         if self._result and self.on_select:
             self.on_select(*self._result)
 
     def _finish(self):
-        """Detiene el event loop. Llamar siempre antes de destruir."""
         self.releaseMouse()
         if self._loop and self._loop.isRunning():
             self._loop.quit()
 
     def _hard_destroy(self):
         """
-        Destrucción determinista de TODOS los recursos:
+        Destruccion determinista de TODOS los recursos:
         - PIL Image (screenshot fullscreen)
-        - QPixmap fullscreen
+        - QPixmap fullscreen + entradas del QPixmapCache global
+        - Cursor personalizado (su QPixmap interno)
         - Widget Qt y sus hijos
-
-        Se llama desde capture_selection() en el bloque finally,
-        garantizando ejecución incluso si ocurre una excepción.
         """
         # 1. Liberar recursos PIL
         if self._screenshot is not None:
@@ -136,17 +130,40 @@ class _SelectionWindow(QWidget):
                 pass
             self._screenshot = None
 
-        # 2. Liberar QPixmap (el buffer de ~8MB)
+        # 2. Liberar QPixmap fullscreen y limpiar el cache global de Qt.
+        #    QPixmapCache mantiene un pool interno propio que NO se libera
+        #    solo por perder la referencia de Python al QPixmap; hay que
+        #    vaciarlo explicitamente para que la memoria grafica se suelte.
         self._pixmap = None
+        QPixmapCache.clear()
 
-        # 3. Destruir resultado intermedio si el crop ya se entregó
-        #    (el caller es dueño de su copia; esta referencia ya no sirve)
+        # 3. Liberar el cursor personalizado (su QPixmap de 24x24 tambien
+        #    vive en el widget hasta que se resetea el cursor).
+        try:
+            self.unsetCursor()
+        except Exception:
+            pass
+
+        # 4. Destruir resultado intermedio ya entregado al caller
         self._result = None
 
-        # 4. Destruir widget Qt y todos sus hijos (labels de toast, etc.)
+        # 5. Detener/limpiar cualquier animacion de toast pendiente
+        if self._toast_anim is not None:
+            try:
+                self._toast_anim.stop()
+            except Exception:
+                pass
+            self._toast_anim = None
+        if self._toast is not None:
+            try:
+                self._toast.deleteLater()
+            except Exception:
+                pass
+            self._toast = None
+
+        # 6. Destruir widget Qt y todos sus hijos
         self.hide()
         self.deleteLater()
-
 
     # ==========================================================
     # BLOQUE: Captura de pantalla
@@ -155,26 +172,26 @@ class _SelectionWindow(QWidget):
         from PySide6.QtGui import QImage
 
         screen = QApplication.primaryScreen()
-
-        # Capturar como QPixmap (se reutiliza en paintEvent)
         self._pixmap = screen.grabWindow(0)
 
-        # Convertir una sola vez al formato correcto
         q_img = self._pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
 
-        width  = q_img.width()
+        width = q_img.width()
         height = q_img.height()
-        ptr    = q_img.bits()
+        ptr = q_img.bits()
 
         self._screenshot = Image.frombytes(
             "RGBA", (width, height), ptr, "raw", "RGBA"
         ).convert("RGB")
 
+        # Liberar explicitamente el QImage intermedio: su buffer es del
+        # mismo tamano que el screenshot completo (ptr referencia estos
+        # bytes hasta que q_img se destruye).
+        del ptr
         del q_img
         gc.collect()
 
         print(f"[*] Screenshot capturado: {width}x{height}")
-
 
     # ==========================================================
     # BLOQUE: Forzar primer plano
@@ -182,13 +199,13 @@ class _SelectionWindow(QWidget):
     def _force_foreground(self):
         import ctypes
         try:
-            hwnd     = int(self.winId())
-            user32   = ctypes.windll.user32
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
 
             fg_hwnd = user32.GetForegroundWindow()
             cur_tid = kernel32.GetCurrentThreadId()
-            fg_tid  = user32.GetWindowThreadProcessId(fg_hwnd, None)
+            fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
 
             attached = False
             if fg_tid and fg_tid != cur_tid:
@@ -212,7 +229,6 @@ class _SelectionWindow(QWidget):
             self.activateWindow()
             self.raise_()
             self.setFocus()
-
 
     # ==========================================================
     # BLOQUE: Utilidades visuales (Toast y Cursor)
@@ -242,21 +258,23 @@ class _SelectionWindow(QWidget):
 
         def _cleanup():
             label.deleteLater()
-            if self._toast is label:     self._toast = None
-            if self._toast_anim is anim: self._toast_anim = None
+            if self._toast is label:
+                self._toast = None
+            if self._toast_anim is anim:
+                self._toast_anim = None
 
         anim.finished.connect(_cleanup)
         anim.start()
 
     def _create_glow_cursor(self):
-        size   = 24
+        size = 24
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
 
-        painter   = QPainter(pixmap)
+        painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        center    = size // 2
-        length    = 11
+        center = size // 2
+        length = 11
         cap_style = Qt.FlatCap
 
         glow_pen = QPen(QColor(255, 255, 255, 100), 4)
@@ -280,8 +298,11 @@ class _SelectionWindow(QWidget):
         painter.drawLine(center, center - length, center, center + length)
 
         painter.end()
-        return QCursor(pixmap, center, center)
-
+        cursor = QCursor(pixmap, center, center)
+        # El QPixmap fuente del cursor queda referenciado internamente por
+        # QCursor; liberamos nuestra copia local explicitamente.
+        del pixmap
+        return cursor
 
     # ==========================================================
     # BLOQUE: Eventos de Mouse
@@ -289,8 +310,8 @@ class _SelectionWindow(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.start_point = event.pos()
-            self.end_point   = event.pos()
-            self.selecting   = True
+            self.end_point = event.pos()
+            self.selecting = True
             self.update()
         elif event.button() == Qt.RightButton:
             self._finish()
@@ -308,14 +329,14 @@ class _SelectionWindow(QWidget):
         self.end_point = event.pos()
         sel = QRect(self.start_point, self.end_point).normalized()
 
-        x1, y1 = sel.left(),  sel.top()
+        x1, y1 = sel.left(), sel.top()
         x2, y2 = sel.right(), sel.bottom()
 
         if (x2 - x1) < SELECTION_MIN_WIDTH or (y2 - y1) < SELECTION_MIN_HEIGHT:
-            print("[WARN] Selección muy pequeña")
-            self._show_toast("El área es muy pequeña", self.end_point)
+            print("[WARN] Seleccion muy pequena")
+            self._show_toast("El area es muy pequena", self.end_point)
             self.start_point = None
-            self.end_point   = None
+            self.end_point = None
             self.update()
             return
 
@@ -324,21 +345,18 @@ class _SelectionWindow(QWidget):
         new_x2 = x2 + 6
         new_y2 = y2 + 6
 
-        # Crop ANTES de liberar screenshot (lo hace _hard_destroy vía finally)
         cropped = self._screenshot.crop((new_x1, new_y1, new_x2, new_y2))
 
-        # Guardar resultado — se entrega en run() después del loop
         self._result = (new_x1, new_y1, new_x2, new_y2, cropped)
 
-        self._finish()  # detiene el event loop → run() continúa
+        self._finish()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self._finish()
 
-
     # ==========================================================
-    # BLOQUE: Renderizado (sin cambios)
+    # BLOQUE: Renderizado (sin cambios funcionales)
     # ==========================================================
     def paintEvent(self, event):
         import colorsys
@@ -356,22 +374,22 @@ class _SelectionWindow(QWidget):
             sel = QRect(self.start_point, self.end_point).normalized()
             W, H = self.width(), self.height()
 
-            left, top     = sel.left(), sel.top()
+            left, top = sel.left(), sel.top()
             right, bottom = sel.right() + 1, sel.bottom() + 1
 
-            painter.fillRect(QRect(0,     0,       W,         top),          overlay_color)
-            painter.fillRect(QRect(0,     bottom,  W,         H - bottom),   overlay_color)
-            painter.fillRect(QRect(0,     top,     left,      bottom - top), overlay_color)
-            painter.fillRect(QRect(right, top,     W - right, bottom - top), overlay_color)
+            painter.fillRect(QRect(0, 0, W, top), overlay_color)
+            painter.fillRect(QRect(0, bottom, W, H - bottom), overlay_color)
+            painter.fillRect(QRect(0, top, left, bottom - top), overlay_color)
+            painter.fillRect(QRect(right, top, W - right, bottom - top), overlay_color)
 
             raw_color = get_selection_color()
-            width     = get_selection_border_width()
-            inset     = max(1, int(width) // 2)
+            width = get_selection_border_width()
+            inset = max(1, int(width) // 2)
             border_rect = QRect(
-                sel.left()  + inset,
-                sel.top()   + inset,
+                sel.left() + inset,
+                sel.top() + inset,
                 sel.width() - inset * 2,
-                sel.height()- inset * 2,
+                sel.height() - inset * 2,
             )
 
             if raw_color == "rainbow":
@@ -394,7 +412,7 @@ class _SelectionWindow(QWidget):
     def _draw_rainbow_border(self, painter, rect, width, hue_offset):
         import colorsys
 
-        x0, y0 = rect.left(),  rect.top()
+        x0, y0 = rect.left(), rect.top()
         x1, y1 = rect.right(), rect.bottom()
         perimeter = 2 * (rect.width() + rect.height())
         if perimeter == 0:
