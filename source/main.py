@@ -14,32 +14,34 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
+# OCR Translator
+# Copyright (C) 2026 ZProjects
 import os
 os.environ["PYSTRAY_BACKEND"] = "win32"
 import sys
 import re
 import threading
+import gc
 
 if sys.platform == "win32":
     import subprocess
     _real_Popen_init = subprocess.Popen.__init__
 
     def _silent_popen_init(self, args, **kwargs):
-        # Si ya viene con startupinfo propio, no tocarlo|
         if kwargs.get("startupinfo") is None:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 0  # SW_HIDE
+            si.wShowWindow = 0
             kwargs["startupinfo"] = si
         _real_Popen_init(self, args, **kwargs)
 
     subprocess.Popen.__init__ = _silent_popen_init
-    
+
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-    
+
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QVBoxLayout, QLabel
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QObject, Signal, Qt, QTimer
@@ -74,7 +76,6 @@ import ctypes
 import tempfile
 import msvcrt
 
-# Variables globales para texto de hotkeys (usado en tooltips y menús)
 hotkeys = get_capture_hotkeys()
 hotkey_text = ", ".join(hotkeys)
 
@@ -83,27 +84,23 @@ hotkey_text = ", ".join(hotkeys)
 # BLOQUE: Interceptación de Progreso (PaddleOCR -> Splash)
 # ==========================================================
 class ProgressCapture:
-    """Intercepta la salida de tqdm de PaddleOCR y la redirige a la splash."""
-
-    def __init__(self, splash, status_text: str, prog_start: float, prog_end: float):
-        self.splash      = splash
+    def __init__(self, splash, status_text, prog_start, prog_end):
+        self.splash = splash
         self.status_text = status_text
-        self.prog_start  = prog_start
-        self.prog_end    = prog_end
-        self._original   = sys.stderr
+        self.prog_start = prog_start
+        self.prog_end = prog_end
+        self._original = sys.stderr
 
     def write(self, text):
         self._original.write(text)
         try:
             match = re.search(r'(\d+)%\|', text)
             if match:
-                pct        = int(match.group(1)) / 100.0
-                mapped     = self.prog_start + (self.prog_end - self.prog_start) * pct
+                pct = int(match.group(1)) / 100.0
+                mapped = self.prog_start + (self.prog_end - self.prog_start) * pct
                 name_match = re.search(r'(\w+\.tar|\w+\.zip|\w+_infer)', text)
-                filename   = f" — {name_match.group(1)}" if name_match else ""
-                self.splash.set_status(
-                    f"{self.status_text}{filename} ({int(pct*100)}%)", mapped
-                )
+                filename = f" — {name_match.group(1)}" if name_match else ""
+                self.splash.set_status(f"{self.status_text}{filename} ({int(pct*100)}%)", mapped)
         except Exception:
             pass
 
@@ -119,25 +116,22 @@ class ProgressCapture:
 
 
 class _Signals(QObject):
-    area_selected           = Signal(int, int, int, int, object)
-    start_capture_s         = Signal()
-    open_preferences        = Signal()
-    open_about              = Signal()
+    area_selected = Signal(int, int, int, int, object)
+    start_capture_s = Signal()
+    open_preferences = Signal()
+    open_about = Signal()
     model_download_finished = Signal(str)
-    model_download_failed   = Signal(str)
+    model_download_failed = Signal(str)
 
     def __init__(self):
         super().__init__()
-        print("[PREF] _Signals inicializado (area_selected, start_capture_s, open_preferences creadas)")
+
 
 _LOCK_FILE_PATH = os.path.join(tempfile.gettempdir(), "ocr_translator_instance.lock")
 _lock_file_handle = None
 
-def acquire_single_instance_lock() -> bool:
-    """
-    Intenta adquirir un file lock exclusivo.
-    Retorna True si esta es la primera instancia, False si ya hay otra corriendo.
-    """
+
+def acquire_single_instance_lock():
     global _lock_file_handle
     try:
         _lock_file_handle = open(_LOCK_FILE_PATH, "w")
@@ -146,11 +140,11 @@ def acquire_single_instance_lock() -> bool:
         _lock_file_handle.flush()
         return True
     except (IOError, OSError):
-        # Ya existe una instancia con el lock
         if _lock_file_handle:
             _lock_file_handle.close()
             _lock_file_handle = None
         return False
+
 
 def release_single_instance_lock():
     global _lock_file_handle
@@ -166,22 +160,16 @@ def release_single_instance_lock():
     except Exception:
         pass
 
-# ==========================================================
-# BLOQUE: Aplicación Principal (Inicialización y Ejecución)
-# ==========================================================
+
 class OCRTranslatorApp:
-    """Aplicación principal de OCR + Traductor con System Tray"""
 
     def __init__(self):
-        # Asignar App User Model ID para icono correcto en barra de tareas
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
         except Exception:
             pass
 
-        # Crear / obtener QApplication ANTES de usarla
         self.qt_app = QApplication.instance() or QApplication(sys.argv)
-        
         self._signals = _Signals()
         self._signals.area_selected.connect(self._run_result_window)
         self._signals.start_capture_s.connect(self._run_selection_window)
@@ -189,29 +177,26 @@ class OCRTranslatorApp:
         self._signals.open_about.connect(self._run_about_window)
         self._signals.model_download_finished.connect(self._on_model_download_finished)
         self._signals.model_download_failed.connect(self._on_model_download_failed)
-        
+
         icon_path = self.get_resource_path("resources/icon.ico")
         if os.path.exists(icon_path):
             self.qt_app.setWindowIcon(QIcon(icon_path))
 
-        self.ocr_engine     = None
-        self.translator     = None
+        self.ocr_engine = None
+        self.translator = None
         self.screen_capture = None
-        self.icon           = None
-        self.running        = True
-        self.capturing      = False
+        self.icon = None
+        self.running = True
+        self.capturing = False
         self._active_result = None
-        self._prefs_window  = None
-        self._about_window  = None
-        self._ocr_executor  = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr_worker")
+        self._prefs_window = None
+        self._about_window = None
+        self._ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr_worker")
 
     def run(self):
-        # Mostrar splash PRIMERO, antes de cualquier otra cosa
         splash = SplashScreen()
         splash.show()
         self.qt_app.processEvents()
-
-        # Ahora sí el resto
         self._install_keyboard_hook()
 
         def _worker():
@@ -234,49 +219,37 @@ class OCRTranslatorApp:
         )
         if not os.path.isdir(frames_dir):
             splash.set_status("Preparando recursos...", 0.05)
-            icon_path = os.path.join(   
+            icon_path = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "resources", "icon.ico"
             )
             if os.path.exists(icon_path):
                 SplashScreen.prebuild_frames(icon_path, frames_dir)
 
-        models_dir   = os.path.join(os.path.expanduser("~"), ".paddleocr")
+        models_dir = os.path.join(os.path.expanduser("~"), ".paddleocr")
         models_exist = os.path.isdir(models_dir) and len(os.listdir(models_dir)) > 0
 
         if not models_exist:
             splash.set_download_mode()
             splash.set_status("Descargando modelos... (primera vez)", 0.10)
-            try:
-                with ProgressCapture(splash, "Descargando", 0.10, 0.70):
-                    self.ocr_engine = OCREngine()  # La instanciación descarga el modelo
-            except Exception:
-                sys.stderr = sys.__stderr__
-                raise
+            with ProgressCapture(splash, "Descargando", 0.10, 0.70):
+                self.ocr_engine = OCREngine()
         else:
             splash.set_status("Cargando motor OCR...", 0.20)
-            try:
-                with ProgressCapture(splash, "Cargando", 0.20, 0.60):
-                    self.ocr_engine = OCREngine()  # Carga el engine en RAM directamente
-            except Exception:
-                sys.stderr = sys.__stderr__
-                raise
+            with ProgressCapture(splash, "Cargando", 0.20, 0.60):
+                self.ocr_engine = OCREngine()
 
         splash.set_status("Calentando modelo...", 0.75)
         self._warmup_ocr()
 
-        splash.set_status("Iniciando traductor...", 0.85)   
-        self.translator     = Translator()
+        splash.set_status("Iniciando traductor...", 0.85)
+        self.translator = Translator()
         self.screen_capture = ScreenCapture(self.ocr_engine, self.translator)
 
         self.setup_tray_icon()
         splash.set_status("¡Listo!", APP_VERSION)
 
-        print("=" * 60)
-        print("OCR + TRADUCTOR INICIADO")
-        print("=" * 60)
-        print("[*] Presiona ", hotkey_text, " para capturar y traducir")
-        print("=" * 60)
+        print("[*] Presiona", hotkey_text, "para capturar y traducir")
 
         threading.Thread(target=self._run_tray, daemon=True).start()
         splash.close()
@@ -291,7 +264,7 @@ class OCRTranslatorApp:
         try:
             dummy = Image.new("RGB", (100, 30), color=(255, 255, 255))
             self.ocr_engine.extract_text(dummy)
-            print("[INFO] Modelo OCR calentado")
+            del dummy
         except Exception:
             pass
 
@@ -299,36 +272,35 @@ class OCRTranslatorApp:
     # BLOQUE: Atajos de Teclado (Hooks Globales)
     # ==========================================================
     def _install_keyboard_hook(self):
-        self._register_hotkeys()  # directo, sin tkinter ni hilo extra
+        self._register_hotkeys()
 
     def _register_hotkeys(self):
-        """Limpia los hotkeys anteriores y registra los actuales desde preferences."""
         try:
             keyboard.unhook_all_hotkeys()
-        except Exception as e:
-            print(f"[WARN] No se pudieron limpiar hotkeys anteriores: {e}")
+        except Exception:
+            pass
 
         hotkeys_list = []
         try:
             hotkeys_list.extend(get_capture_hotkeys())
-        except Exception as e:
-            print(f"[WARN] No se pudo leer hotkey principal: {e}")
+        except Exception:
+            pass
 
         for getter in (get_capture_secondary_1, get_capture_secondary_2):
             try:
                 val = getter()
                 if val and val.strip():
                     hotkeys_list.append(val.strip())
-            except Exception as e:
-                print(f"[WARN] No se pudo leer hotkey secundario: {e}")
+            except Exception:
+                pass
 
         registered = []
         for hotkey in hotkeys_list:
             try:
                 keyboard.add_hotkey(hotkey, self.start_capture)
                 registered.append(hotkey)
-            except Exception as e:
-                print(f"[WARN] No se pudo registrar hotkey '{hotkey}': {e}")
+            except Exception:
+                pass
 
         print("[OK] Hotkeys registrados:", ", ".join(registered) if registered else "ninguno")
 
@@ -336,22 +308,14 @@ class OCRTranslatorApp:
     # BLOQUE: Flujo de Captura y Procesamiento de Resultados
     # ==========================================================
     def start_capture(self):
-        if not self.running:
+        if not self.running or self.capturing or self._prefs_window is not None:
             return
-        if self.capturing:
-            print("[WARN] Ya hay una captura en proceso, ignorando...")
-            return
-        if self._prefs_window is not None:
-            print("[WARN] Preferencias abiertas, captura bloqueada.")
-            return
-
         self.capturing = True
-        print("[*] Iniciando captura...")
         self._signals.start_capture_s.emit()
 
     def _run_selection_window(self):
         try:
-            capture_selection(self.on_area_selected)  # ← una sola línea
+            capture_selection(self.on_area_selected)
         except Exception as e:
             print(f"[ERROR SelectionWindow] {type(e).__name__}: {e}")
         finally:
@@ -359,26 +323,19 @@ class OCRTranslatorApp:
 
     def on_area_selected(self, x1, y1, x2, y2, cropped_image):
         if cropped_image.width < 10 or cropped_image.height < 10:
-            print("[WARN] Área muy pequeña")
-            # 🆕 liberar imagen si se descarta
             try:
                 cropped_image.close()
             except Exception:
                 pass
             return
-
-        print(f"[*] Área seleccionada: ({x1},{y1}) -> ({x2},{y2})")
-        # 🆕 pasar la imagen directamente sin lambda que la capture en closure
         self._signals.area_selected.emit(x1, y1, x2, y2, cropped_image)
-
 
     def _run_result_window(self, x1, y1, x2, y2, cropped_image):
         if self._active_result and not self._active_result.is_closed:
             self._active_result.close()
             self._active_result = None
 
-        MARGEN_EXTERNO = 1
-        result_window = UnifiedResultWindow(x1, y1, x2, y2, margin=MARGEN_EXTERNO)
+        result_window = UnifiedResultWindow(x1, y1, x2, y2, margin=1)
         self._active_result = result_window
         result_window.show_loading()
 
@@ -395,82 +352,48 @@ class OCRTranslatorApp:
                 original_text = '\n'.join(
                     line for line in original_text.split('\n') if line.strip()
                 )
-                result_window.update_status(
-                    f"Traduciendo ({len(original_text)} caracteres)..."
-                )
+                result_window.update_status(f"Traduciendo ({len(original_text)} caracteres)...")
                 translated_text = self.translator.translate(original_text)
-
-                # 🆕 pasar cropped_image directamente — UnifiedResultWindow
-                # es dueña de la imagen a partir de aquí y la cierra en _hard_destroy()
                 result_window.show_result(translated_text, cropped_image, blocks)
 
             except Exception as e:
                 print(f"[ERROR] {type(e).__name__}: {e}")
-                # 🆕 si hay error, la ventana no tomó la imagen — cerrarla aquí
                 try:
                     cropped_image.close()
                 except Exception:
                     pass
                 result_window.close_after(3000)
-
             finally:
-                import gc
                 gc.collect()
 
         self.capturing = False
         self._ocr_executor.submit(process)
         result_window.run()
 
-    # ==========================================================
-    # BLOQUE: System Tray (Bandeja del Sistema)
-    # ==========================================================
-    def _on_model_download_finished(self, lang: str):
-        print(f"[OCR] Modelo '{lang}' descargado correctamente.")
-        # El modelo ya está cargado en el Singleton por init_engine_for_download
-        # Hacemos un warmup para asegurar que todo está listo
-        try:
-            self._warmup_ocr()
-        except Exception as e:
-            print(f"[ERROR] No se pudo calentar el nuevo OCR engine: {e}")
-
     def on_quit(self, icon, item):
-        print("[PREF] on_quit llamado desde tray")
         self.running = False
-        
-        # Limpiar el motor OCR correctamente antes de morir
         try:
             if self.ocr_engine:
                 self.ocr_engine.release_engine()
-        except:
+        except Exception:
             pass
-        
-        # Primero forzar salida en hilo separado por si icon.stop() bloquea
+
         def _force_exit():
             import time
             time.sleep(1)
             os._exit(0)
-        
+
         threading.Thread(target=_force_exit, daemon=True).start()
-        
         try:
             keyboard.unhook_all_hotkeys()
-        except:
+        except Exception:
             pass
-        
-        try:
-            if hasattr(self, '_hook_root') and self._hook_root:
-                self._hook_root.destroy()
-        except:
-            pass
-        
         try:
             icon.stop()
-        except:
+        except Exception:
             pass
-        
-        # Si icon.stop() retorna normalmente, esto lo cierra limpiamente
         QTimer.singleShot(100, lambda: os._exit(0))
-        
+
     def on_capture(self, icon, item):
         self.start_capture()
 
@@ -478,45 +401,32 @@ class OCRTranslatorApp:
         self._signals.open_about.emit()
 
     def on_preferences(self, icon, item):
-        print("[PREF] on_preferences llamado desde tray")
         if self.capturing:
-            print("[PREF] Estábamos en estado capturando=True, cancelando para abrir Preferencias")
             self.capturing = False
-        if not self.running:
-            print("[PREF][WARN] on_preferences llamado pero self.running=False")
         self._signals.open_preferences.emit()
 
     def setup_tray_icon(self):
         image = self._create_tray_image()
-        TRAY_MENU_CAPTURE = f"Capturar y Traducir {hotkey_text}"
-        menu  = pystray.Menu(
-            pystray.MenuItem(TRAY_MENU_CAPTURE, self.on_capture, default=True),
+        menu = pystray.Menu(
+            pystray.MenuItem(f"Capturar y Traducir {hotkey_text}", self.on_capture, default=True),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(TRAY_MENU_PREFERENCES, self.on_preferences),
             pystray.MenuItem(TRAY_MENU_ABOUT, self.on_about),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(TRAY_MENU_QUIT, self.on_quit),
         )
-        tooltip = f"OCR Translator - Presiona {hotkey_text} para capturar"
-
-        self.icon = pystray.Icon(
-            TRAY_NAME,
-            image,
-            tooltip,
-            menu,
-        )
+        self.icon = pystray.Icon(TRAY_NAME, image, f"OCR Translator - {hotkey_text}", menu)
 
     def _create_tray_image(self):
         icon_path = self.get_resource_path('resources/icon.ico')
         if os.path.exists(icon_path):
             try:
-                img = Image.open(icon_path)
-                return img.resize((64, 64), Image.Resampling.LANCZOS)
+                return Image.open(icon_path).resize((64, 64), Image.Resampling.LANCZOS)
             except Exception:
                 pass
         from PIL import ImageDraw
         image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
-        draw  = ImageDraw.Draw(image)
+        draw = ImageDraw.Draw(image)
         draw.ellipse([4, 4, 60, 60], fill=(0, 120, 212, 255))
         draw.text((22, 18), "T", fill=(255, 255, 255, 255))
         return image
@@ -537,7 +447,6 @@ class OCRTranslatorApp:
         dlg = QDialog()
         dlg.setWindowTitle(ABOUT_TITLE)
         dlg.setAttribute(Qt.WA_DeleteOnClose, True)
-        # 🆕 evita que cerrar este diálogo termine el event loop de Qt
         dlg.setAttribute(Qt.WA_QuitOnClose, False)
         dlg.setWindowFlags(Qt.Window)
         dlg.setMinimumWidth(320)
@@ -548,15 +457,12 @@ class OCRTranslatorApp:
         layout.addWidget(label)
 
         dlg.destroyed.connect(lambda: setattr(self, '_about_window', None))
-
         self._about_window = dlg
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
 
     def _run_preferences_window(self):
-        print("[PREF] _run_preferences_window invocado en hilo principal Qt")
-
         if self._prefs_window is not None:
             try:
                 if self._prefs_window.isVisible():
@@ -569,9 +475,7 @@ class OCRTranslatorApp:
         win = PreferencesWindow()
 
         def _on_closed():
-            print("[PREF] PreferencesWindow cerrada, limpiando referencia")
             self._prefs_window = None
-            # ✅ Desconectar señales para evitar acumulación
             try:
                 self._signals.model_download_finished.disconnect(win.on_model_download_finished)
                 self._signals.model_download_failed.disconnect(win.on_model_download_failed)
@@ -579,8 +483,8 @@ class OCRTranslatorApp:
                 pass
             try:
                 self._register_hotkeys()
-            except Exception as e:
-                print(f"[WARN] No se pudieron recargar hotkeys: {e}")
+            except Exception:
+                pass
 
         win.closed.connect(_on_closed)
         win.download_model_requested.connect(self._download_model_with_splash)
@@ -590,14 +494,11 @@ class OCRTranslatorApp:
         win.show()
         win.raise_()
         win.activateWindow()
-
         self._prefs_window = win
-        
+
     def _download_model_with_splash(self, new_lang: str):
-        """Abre el splash, descarga el modelo en un thread y recarga el engine en el hilo principal."""
         splash = SplashScreen()
         splash.show()
-        self.qt_app.processEvents()
         self.qt_app.processEvents()
 
         def _worker():
@@ -605,9 +506,7 @@ class OCRTranslatorApp:
                 splash.set_download_mode()
                 splash.set_status(f"Descargando modelo '{new_lang}'...", 0.10)
                 with ProgressCapture(splash, "Descargando", 0.10, 0.90):
-                    # El Singleton de OCREngine se encarga de descargar e instanciar internamente
-                    self.ocr_engine.init_engine_for_download(new_lang)
-                    
+                    self.ocr_engine._init_engine(new_lang)
                 splash.set_status("¡Modelo listo!", 1.0)
                 import time
                 time.sleep(0.6)
@@ -621,32 +520,15 @@ class OCRTranslatorApp:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_model_download_finished(self, lang: str):
-        print(f"[OCR] Modelo '{lang}' descargado correctamente.")
-        # El modelo ya está cargado en el Singleton por init_engine_for_download
-        # Hacemos un warmup para asegurar que todo está listo
         try:
             self._warmup_ocr()
         except Exception as e:
-            print(f"[ERROR] No se pudo calentar el nuevo OCR engine: {e}")
-
+            print(f"[ERROR] No se pudo calentar el OCR engine: {e}")
 
     def _on_model_download_failed(self, lang: str):
-        QMessageBox.warning(
-            None,
-            "Error de descarga",
-            f"No se pudo descargar el modelo para '{lang}'.\nVerifica tu conexión e inténtalo de nuevo.",
-        )
+        QMessageBox.warning(None, "Error de descarga",
+            f"No se pudo descargar el modelo para '{lang}'.\nVerifica tu conexión e inténtalo de nuevo.")
 
-    def _show_error_message(self, message):
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle(APP_NAME)
-        msg.setText(message)
-        msg.exec()
-
-    # ==========================================================
-    # BLOQUE: Helpers de Utilidades
-    # ==========================================================
     def get_resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
@@ -656,10 +538,8 @@ class OCRTranslatorApp:
 
 
 if __name__ == "__main__":
-    # Verificar instancia única ANTES de inicializar Qt
     if not acquire_single_instance_lock():
-        sys.exit(0) 
-
+        sys.exit(0)
     try:
         app = OCRTranslatorApp()
         app.run()

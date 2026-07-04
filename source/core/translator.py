@@ -87,7 +87,7 @@ class Translator:
                 time.sleep(wait)
 
         print(f"[TRANSLATE ERROR] Chunk falló tras {self.MAX_RETRIES} intentos: "
-              f"{type(last_error).__name__}: {last_error}. Se conserva texto original.")
+              f"{type(e).__name__}: {last_error}. Se conserva texto original.")
         return chunk
 
     def translate(self, text: str) -> str:
@@ -96,9 +96,13 @@ class Translator:
         if not text:
             return ""
 
-        text = "\n".join(line for line in text.split("\n") if line.strip())
-        if not text:
-            return ""
+        # ======================================================
+        # LOG DE ENTRADA EXACTO (Sin modificar)
+        # ======================================================
+        #print("\n" + "="*60)
+        #print("[LOG ENTRADA] Texto exacto recibido por el traductor:")
+        #print(repr(text))
+        #print("="*60 + "\n")
 
         source = get_translation_source() or "auto"
         target = get_translation_target() or "en"
@@ -119,6 +123,14 @@ class Translator:
                     time.sleep(self.REQUEST_DELAY)
 
             translated = " ".join(translated_chunks)
+
+            # ======================================================
+            # LOG DE SALIDA EXACTO (Sin modificar)
+            # ======================================================
+            #print("\n" + "-"*60)
+            #print("[LOG SALIDA] Texto exacto devuelto por el traductor:")
+            #print(repr(translated))
+            #print("-"*60 + "\n")
 
             elapsed = time.perf_counter() - t0
             print(f"[TRANSLATE] Completado en {elapsed:.2f}s ({len(text)}→{len(translated)} chars, "

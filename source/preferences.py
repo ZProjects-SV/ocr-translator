@@ -173,6 +173,7 @@ def get_downloaded_langs() -> list[str]:
     value = s.value("ocr/downloaded_langs", "")
     if not value:
         return []
+    print(f"[OCR] get_downloaded_langs: {value}")
     return [lang.strip() for lang in value.split(",") if lang.strip()]
 
 def add_downloaded_lang(lang: str) -> None:
@@ -181,4 +182,5 @@ def add_downloaded_lang(lang: str) -> None:
     if lang not in langs:
         langs.append(lang)
         s.setValue("ocr/downloaded_langs", ",".join(langs))
+        print(f"[OCR] add_downloaded_lang: {lang}")
 # (Dependencias/Interacciones: Llamado exclusivamente por 'ocr_engine.py' para saber si un idioma requiere descarga o ya está disponible localmente.)
