@@ -163,24 +163,3 @@ def get_selection_border_width() -> int:
 def set_selection_border_width(width: int) -> None:
     _settings().setValue("appearance/border_width", int(width))
 # (Dependencias/Interacciones: Llamado por 'selection_window.py' para dibujar el área y por 'loading_window.py' para renderizar el texto traducido.)
-
-
-# ==========================================================
-# BLOQUE: Control de Modelos OCR Descargados
-# ==========================================================
-def get_downloaded_langs() -> list[str]:
-    s = _settings()
-    value = s.value("ocr/downloaded_langs", "")
-    if not value:
-        return []
-    print(f"[OCR] get_downloaded_langs: {value}")
-    return [lang.strip() for lang in value.split(",") if lang.strip()]
-
-def add_downloaded_lang(lang: str) -> None:
-    s = _settings()
-    langs = get_downloaded_langs()
-    if lang not in langs:
-        langs.append(lang)
-        s.setValue("ocr/downloaded_langs", ",".join(langs))
-        print(f"[OCR] add_downloaded_lang: {lang}")
-# (Dependencias/Interacciones: Llamado exclusivamente por 'ocr_engine.py' para saber si un idioma requiere descarga o ya está disponible localmente.)

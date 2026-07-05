@@ -14,12 +14,10 @@ from preferences import get_result_font_family
 # ==========================================================
 # Widget de imagen con zoom y drag
 # ==========================================================
-class ZoomableImageLabel(QLabel):
+class ZoomableImageLabel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pixmap_original: QPixmap | None = None
-        self._canvas: QPixmap | None = None
-        self._canvas_size: tuple[int, int] = (0, 0)
+        self._pixmap: QPixmap | None = None
         self._zoom = 1.0
         self._zoom_min = 0.2
         self._zoom_max = 8.0
@@ -28,27 +26,36 @@ class ZoomableImageLabel(QLabel):
         self._drag_last = QPointF()
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
-        self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
     def setSourcePixmap(self, pixmap: QPixmap):
-        self._pixmap_original = pixmap
+        self._pixmap = pixmap
         self._zoom = 1.0
         self._offset = QPointF(0, 0)
-        self._redraw()
+        self.update()
 
     def resetView(self):
         self._zoom = 1.0
         self._offset = QPointF(0, 0)
-        self._redraw()
+        self.update()
 
     def clearPixmaps(self):
-        self._pixmap_original = None
-        self._canvas = None
-        self._canvas_size = (0, 0)
-        super().setPixmap(QPixmap())
+        self._pixmap = None
+        self.update()
+
+    # --- sin _redraw ni _canvas ni pixmap.scaled ---
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#1a1a1a"))
+        if self._pixmap and not self._pixmap.isNull():
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.translate(self._offset)
+            painter.scale(self._zoom, self._zoom)
+            painter.drawPixmap(0, 0, self._pixmap)
+        painter.end()
 
     def wheelEvent(self, event: QWheelEvent):
-        if not self._pixmap_original:
+        if not self._pixmap:
             return
         delta = event.angleDelta().y()
         factor = 1.15 if delta > 0 else (1 / 1.15)
@@ -57,7 +64,7 @@ class ZoomableImageLabel(QLabel):
         img_point = (cursor_pos - self._offset) / self._zoom
         self._zoom = new_zoom
         self._offset = cursor_pos - img_point * self._zoom
-        self._redraw()
+        self.update()
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
@@ -70,35 +77,12 @@ class ZoomableImageLabel(QLabel):
             delta = QPointF(event.position()) - self._drag_last
             self._offset += delta
             self._drag_last = QPointF(event.position())
-            self._redraw()
+            self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
             self._drag_active = False
             self.setCursor(Qt.OpenHandCursor)
-
-    def _redraw(self):
-        if not self._pixmap_original:
-            return
-        w = self.width()
-        h = self.height()
-
-        if self._canvas is None or self._canvas_size != (w, h):
-            self._canvas = QPixmap(w, h)
-            self._canvas_size = (w, h)
-
-        self._canvas.fill(QColor("#1a1a1a"))
-        scaled = self._pixmap_original.scaled(
-            int(self._pixmap_original.width() * self._zoom),
-            int(self._pixmap_original.height() * self._zoom),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        painter = QPainter(self._canvas)
-        painter.drawPixmap(int(self._offset.x()), int(self._offset.y()), scaled)
-        painter.end()
-        del scaled
-        super().setPixmap(self._canvas)
 
 
 # ==========================================================

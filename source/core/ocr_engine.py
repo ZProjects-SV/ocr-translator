@@ -11,7 +11,6 @@ from config import (
     PADDLE_MIN_CONFIDENCE,
     PADDLE_MIN_CONFIDENCE_PIXEL,
 )
-from preferences import get_translation_source, get_downloaded_langs, add_downloaded_lang
 
 
 # ==========================================================
@@ -79,7 +78,7 @@ def _reading_order_key(b):
 
 
 # ==========================================================
-# Cache LRU de engines por lang
+# Cache LRU de engines (Simplificado ya que no hay múltiples idiomas)
 # ==========================================================
 class _EngineCache:
     def __init__(self, max_size: int = 1):
@@ -117,29 +116,18 @@ class _EngineCache:
 # Clase Principal -- OCREngine (ONNX Runtime)
 # ==========================================================
 class OCREngine:
-    _downloaded_langs: set = set()
     _FIXED_DET_LIMIT = 960
     _GC_EVERY_N_CALLS = 15
     _MAX_THREADS = 4
 
-    @classmethod
-    def mark_lang_downloaded(cls, source_lang: str) -> None:
-        cls._downloaded_langs.add(source_lang)
-        add_downloaded_lang(source_lang)
-
-    @classmethod
-    def is_model_downloaded(cls, source_lang: str) -> bool:
-        return source_lang in cls._downloaded_langs
-
     def __init__(self):
-        OCREngine._downloaded_langs.update(get_downloaded_langs())
         self._cache = _EngineCache(max_size=1)
         self._engine = None
-        self._current_lang = None
         self._calls_since_gc = 0
-
-        source_lang = get_translation_source() or "en"
-        self._load_engine(source_lang)
+        
+        # Como es multilenguaje, usamos una clave fija para la caché
+        self._cache_key = ("multilang",)
+        self._load_engine()
 
     def _build_engine(self):
         from paddleocr import PaddleOCR
@@ -168,35 +156,25 @@ class OCREngine:
             text_det_limit_type="max",
         )
 
-    def _load_engine(self, source_lang: str) -> None:
-        key = (source_lang,)
-
-        cached = self._cache.get(key)
+    def _load_engine(self) -> None:
+        cached = self._cache.get(self._cache_key)
         if cached is not None:
             self._engine = cached
-            self._current_lang = source_lang
             return
 
         engine = self._build_engine()
 
-        self._cache.put(key, engine)
+        self._cache.put(self._cache_key, engine)
         self._engine = engine
-        self._current_lang = source_lang
-        OCREngine.mark_lang_downloaded(source_lang)
-
-    def _init_engine(self, source_lang: str = None) -> None:
-        source_lang = source_lang or get_translation_source() or "en"
-        self._load_engine(source_lang)
 
     def release_engine(self) -> None:
         self._cache.clear()
         self._engine = None
-        self._current_lang = None
         gc.collect()
 
-    def _ensure_engine_ready(self, source_lang: str) -> None:
-        if source_lang != self._current_lang or self._engine is None:
-            self._load_engine(source_lang)
+    def _ensure_engine_ready(self) -> None:
+        if self._engine is None:
+            self._load_engine()
 
     def _maybe_collect(self) -> None:
         self._calls_since_gc += 1
@@ -309,13 +287,11 @@ class OCREngine:
     # ---------------------------------------------------------
     # Inferencia unificada
     # ---------------------------------------------------------
-    def _run_inference(self, image: Image.Image, lang: str = None,
-                       save_debug: bool = False, return_boxes: bool = False):
+    def _run_inference(self, image: Image.Image, save_debug: bool = False, return_boxes: bool = False):
         if image.width < 10 or image.height < 10:
             return ("", []) if return_boxes else ""
 
-        source_lang = lang or get_translation_source() or "en"
-        self._ensure_engine_ready(source_lang)
+        self._ensure_engine_ready()
 
         if self._engine is None:
             raise RuntimeError("OCR engine no inicializado")
@@ -370,17 +346,15 @@ class OCREngine:
     # ---------------------------------------------------------
     # API pública
     # ---------------------------------------------------------
-    def extract_text(self, image: Image.Image, lang: str = None,
-                     save_debug: bool = False) -> str:
-        return self._run_inference(image, lang, save_debug, return_boxes=False)
+    def extract_text(self, image: Image.Image, save_debug: bool = False) -> str:
+        return self._run_inference(image, save_debug, return_boxes=False)
 
-    def extract_text_with_boxes(self, image: Image.Image,
-                                save_debug: bool = False):
-        return self._run_inference(image, None, save_debug, return_boxes=True)
+    def extract_text_with_boxes(self, image: Image.Image, save_debug: bool = False):
+        return self._run_inference(image, save_debug, return_boxes=True)
 
-    def process_area(self, x1, y1, x2, y2, lang: str = None) -> str:
+    def process_area(self, x1, y1, x2, y2) -> str:
         img = self.capture_area(x1, y1, x2, y2)
         try:
-            return self.extract_text(img, lang)
+            return self.extract_text(img)
         finally:
             img.close()

@@ -16,6 +16,7 @@
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 import time
+import random
 from typing import List
 
 from preferences import (
@@ -32,9 +33,10 @@ class Translator:
     """Motor de traducción usando Google Translate gratuito.
     Patrón efímero estricto: Instanciar -> Procesar -> Destruir."""
 
-    MAX_RETRIES = 3
-    BASE_BACKOFF = 1.0  # segundos, crece exponencialmente
-    REQUEST_DELAY = 0.3  # pausa entre chunks para evitar rate limiting
+    MAX_RETRIES = 4
+    BASE_BACKOFF = 5.0
+    REQUEST_DELAY = 0.5
+    MAX_BACKOFF = 60.0
 
     def __init__(self) -> None:
         print("[OK] Traductor listo (ephemeral, sin caché).")
@@ -71,26 +73,38 @@ class Translator:
         return chunks
 
     def _translate_chunk_with_retry(self, translator, chunk: str) -> str:
-        """Traduce un chunk individual con reintentos y backoff exponencial.
-        Si todos los intentos fallan, devuelve el chunk original sin traducir
-        en vez de tumbar toda la traducción."""
+        """Traduce un chunk usando la misma instancia del traductor.
+        Si falla por red, espera progresivamente (sin crear sesiones nuevas)
+        para no activar alertas de spam en Google."""
+        
         last_error = None
+        current_backoff = self.BASE_BACKOFF
 
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
+                # Usamos el mismo objeto translator. deep_translator hará 
+                # una única petición HTTP limpia por llamada.
                 return translator.translate(chunk)
+                
             except Exception as e:
                 last_error = e
-                wait = self.BASE_BACKOFF * (2 ** (attempt - 1))
+                jitter = random.uniform(0.8, 1.2)  # Variación aleatoria +/- 20%
+                wait = current_backoff * jitter
+                
                 print(f"[TRANSLATE WARN] Intento {attempt}/{self.MAX_RETRIES} falló "
-                      f"({type(e).__name__}: {e}). Reintentando en {wait:.1f}s...")
+                      f"({type(e).__name__}). Reintentando en {wait:.1f}s...")
+                
                 time.sleep(wait)
+                
+                # Doblamos el tiempo de espera para el próximo intento
+                current_backoff = min(current_backoff * 2, self.MAX_BACKOFF)
 
         print(f"[TRANSLATE ERROR] Chunk falló tras {self.MAX_RETRIES} intentos: "
-              f"{type(e).__name__}: {last_error}. Se conserva texto original.")
+              f"{type(last_error).__name__}: {last_error}. Se conserva texto original.")
         return chunk
 
     def translate(self, text: str) -> str:
+        # Importación diferida
         from deep_translator import GoogleTranslator
 
         if not text:
@@ -110,15 +124,20 @@ class Translator:
 
         result = ""
         try:
-            print(f"[TRANSLATE] Instanciando GoogleTranslator ({source}→{target})...")
+            print(f"[TRANSLATE] Iniciando traducción ({source}→{target})...")
             t0 = time.perf_counter()
 
+            # Instanciamos UNA sola vez
             translator = GoogleTranslator(source=source, target=target)
             chunks = self._split_text_intelligently(text, max_chars)
 
             translated_chunks = []
             for idx, chunk in enumerate(chunks):
-                translated_chunks.append(self._translate_chunk_with_retry(translator, chunk))
+                translated_chunks.append(
+                    self._translate_chunk_with_retry(translator, chunk)
+                )
+                
+                # Pausa natural entre chunks exitosos (muy importante para evitar baneos)
                 if idx < len(chunks) - 1:
                     time.sleep(self.REQUEST_DELAY)
 

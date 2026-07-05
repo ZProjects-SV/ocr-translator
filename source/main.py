@@ -68,6 +68,7 @@ from ui.selection_window import capture_selection
 from ui.preferences_window import PreferencesWindow
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from PIL import Image
 import pystray
@@ -170,13 +171,12 @@ class OCRTranslatorApp:
             pass
 
         self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        self.qt_app.setQuitOnLastWindowClosed(False)
         self._signals = _Signals()
         self._signals.area_selected.connect(self._run_result_window)
         self._signals.start_capture_s.connect(self._run_selection_window)
         self._signals.open_preferences.connect(self._run_preferences_window)
         self._signals.open_about.connect(self._run_about_window)
-        self._signals.model_download_finished.connect(self._on_model_download_finished)
-        self._signals.model_download_failed.connect(self._on_model_download_failed)
 
         icon_path = self.get_resource_path("resources/icon.ico")
         if os.path.exists(icon_path):
@@ -226,14 +226,26 @@ class OCRTranslatorApp:
             if os.path.exists(icon_path):
                 SplashScreen.prebuild_frames(icon_path, frames_dir)
 
-        models_dir = os.path.join(os.path.expanduser("~"), ".paddleocr")
-        models_exist = os.path.isdir(models_dir) and len(os.listdir(models_dir)) > 0
+        # ---------------------------------------------------------
+        # COMPROBACIÓN DIRECTA EN main.py DE LA RUTA DE PADDLEX
+        # ---------------------------------------------------------
+        paddle_dir = Path.home() / ".paddlex" / "official_models"
+        models_exist = (
+            paddle_dir.exists() and 
+            (paddle_dir / "PP-OCRv6_medium_det_onnx").is_dir() and 
+            (paddle_dir / "PP-OCRv6_medium_rec_onnx").is_dir()
+        )
 
         if not models_exist:
             splash.set_download_mode()
-            splash.set_status("Descargando modelos... (primera vez)", 0.10)
+            splash.set_status("Descargando modelos...", 0.10)
+            splash.set_download_animation_enabled(True)
+
             with ProgressCapture(splash, "Descargando", 0.10, 0.70):
                 self.ocr_engine = OCREngine()
+
+            splash.set_download_animation_enabled(False)
+            splash.set_status("Modelos descargados. Cargando motor...", 0.70)
         else:
             splash.set_status("Cargando motor OCR...", 0.20)
             with ProgressCapture(splash, "Cargando", 0.20, 0.60):
@@ -247,12 +259,14 @@ class OCRTranslatorApp:
         self.screen_capture = ScreenCapture(self.ocr_engine, self.translator)
 
         self.setup_tray_icon()
-        splash.set_status("¡Listo!", APP_VERSION)
+        splash.set_status(f"¡Listo! v{APP_VERSION}", 1.5)
 
         print("[*] Presiona", hotkey_text, "para capturar y traducir")
 
         threading.Thread(target=self._run_tray, daemon=True).start()
-        splash.close()
+        
+        splash.set_status("Programa listo para usarse.", 1.0)
+        splash.show_completion_button()
 
     def _run_tray(self):
         try:
@@ -465,69 +479,29 @@ class OCRTranslatorApp:
     def _run_preferences_window(self):
         if self._prefs_window is not None:
             try:
-                if self._prefs_window.isVisible():
-                    self._prefs_window.raise_()
-                    self._prefs_window.activateWindow()
-                    return
+                self._prefs_window.raise_()
+                self._prefs_window.activateWindow()
+                return
+            except RuntimeError:
+                self._prefs_window = None
             except Exception:
                 self._prefs_window = None
 
         win = PreferencesWindow()
+        self._prefs_window = win
 
-        def _on_closed():
+        def _on_destroyed(*_):
             self._prefs_window = None
-            try:
-                self._signals.model_download_finished.disconnect(win.on_model_download_finished)
-                self._signals.model_download_failed.disconnect(win.on_model_download_failed)
-            except RuntimeError:
-                pass
             try:
                 self._register_hotkeys()
             except Exception:
                 pass
 
-        win.closed.connect(_on_closed)
-        win.download_model_requested.connect(self._download_model_with_splash)
-        self._signals.model_download_finished.connect(win.on_model_download_finished)
-        self._signals.model_download_failed.connect(win.on_model_download_failed)
+        win.destroyed.connect(_on_destroyed)
 
         win.show()
         win.raise_()
         win.activateWindow()
-        self._prefs_window = win
-
-    def _download_model_with_splash(self, new_lang: str):
-        splash = SplashScreen()
-        splash.show()
-        self.qt_app.processEvents()
-
-        def _worker():
-            try:
-                splash.set_download_mode()
-                splash.set_status(f"Descargando modelo '{new_lang}'...", 0.10)
-                with ProgressCapture(splash, "Descargando", 0.10, 0.90):
-                    self.ocr_engine._init_engine(new_lang)
-                splash.set_status("¡Modelo listo!", 1.0)
-                import time
-                time.sleep(0.6)
-                self._signals.model_download_finished.emit(new_lang)
-            except Exception as e:
-                print(f"[ERROR] Descarga de modelo fallida: {e}")
-                self._signals.model_download_failed.emit(new_lang)
-            finally:
-                splash.close()
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_model_download_finished(self, lang: str):
-        try:
-            self._warmup_ocr()
-        except Exception as e:
-            print(f"[ERROR] No se pudo calentar el OCR engine: {e}")
-
-    def _on_model_download_failed(self, lang: str):
-        QMessageBox.warning(None, "Error de descarga",
-            f"No se pudo descargar el modelo para '{lang}'.\nVerifica tu conexión e inténtalo de nuevo.")
 
     def get_resource_path(self, relative_path):
         try:
