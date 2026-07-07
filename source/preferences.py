@@ -31,7 +31,9 @@ from config import (
     CAPTURE_SECONDARY_2,
     SELECTION_COLOR,      
     RESULT_FONT_FAMILY,   
-    SELECTION_BORDER_WIDTH,     
+    SELECTION_BORDER_WIDTH,  
+    OCR_RESTART_ENABLED,
+    OCR_RESTART_CHAR_THRESHOLD,   
 )
 
 # ==========================================================
@@ -90,6 +92,26 @@ def set_translation_cache_enabled(enabled: bool) -> None:
     s = _settings()
     s.setValue("translation/cache_enabled", bool(enabled))
 # (Dependencias/Interacciones: Llamado por 'translator.py' en tiempo real y por 'preferences_window.py' al guardar.)
+
+
+# ==========================================================
+# BLOQUE: Preferencias de OCR
+# ==========================================================
+def get_ocr_restart_enabled() -> bool:
+    s = _settings()
+    return s.value("ocr/restart_enabled", OCR_RESTART_ENABLED, type=bool)
+
+def set_ocr_restart_enabled(value: bool) -> None:
+    s = _settings()
+    s.setValue("ocr/restart_enabled", value)
+
+def get_ocr_restart_char_threshold() -> int:
+    s = _settings()
+    return s.value("ocr/restart_char_threshold", OCR_RESTART_CHAR_THRESHOLD, type=int)
+
+def set_ocr_restart_char_threshold(value: int) -> None:
+    s = _settings()
+    s.setValue("ocr/restart_char_threshold", value)
 
 
 # ==========================================================

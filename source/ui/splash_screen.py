@@ -16,6 +16,7 @@ class _Signals(QObject):
     close_signal = Signal()
     show_button_signal = Signal()
     set_download_anim_signal = Signal(bool)
+    show_error_signal = Signal(str)  
 
 
 class SplashScreen(QWidget):
@@ -35,6 +36,7 @@ class SplashScreen(QWidget):
         self._app = app
 
         self._closed = False
+        self._is_error = False
         self._progress = 0.0
         self._status = "Iniciando..."
         self._title = "OCR Translator"
@@ -66,6 +68,7 @@ class SplashScreen(QWidget):
         self._sig.close_signal.connect(self._do_close)
         self._sig.show_button_signal.connect(self._do_show_button)
         self._sig.set_download_anim_signal.connect(self._set_download_animation)
+        self._sig.show_error_signal.connect(self._do_show_error)
 
         self._dot_timer = QTimer(self)
         self._dot_timer.setInterval(500)
@@ -122,6 +125,23 @@ class SplashScreen(QWidget):
         if self._closed:
             return
         self._sig.show_button_signal.emit()
+        
+    def show_error(self, message: str):
+        if self._closed:
+            return
+        self._sig.show_error_signal.emit(message)
+
+    def _do_show_error(self, message: str):
+        self._is_error = True
+        self._set_download_animation(False)
+        self._title = "Error"
+        self._subtitle = "No se pudo iniciar la aplicación"
+        self._status = message
+        self._progress = 1.0
+        self._btn_accept.setText("Cerrar")
+        self._btn_accept.show()
+        self._btn_accept.raise_()
+        self.update()
 
     def run_async(self, callback):
         def _worker():
@@ -179,6 +199,8 @@ class SplashScreen(QWidget):
         self._dot_timer.stop()
         self.hide()
         self.deleteLater()
+        if self._is_error:
+            self._app.quit()
 
     def _do_close(self):
         self._close_safely()

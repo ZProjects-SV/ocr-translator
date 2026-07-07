@@ -18,6 +18,7 @@
 # Copyright (C) 2026 ZProjects
 import os
 os.environ["PYSTRAY_BACKEND"] = "win32"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import sys
 import re
 import threading
@@ -44,7 +45,8 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QVBoxLayout, QLabel
 from PySide6.QtGui import QIcon
-from PySide6.QtCore import QObject, Signal, Qt, QTimer
+from PySide6.QtCore import (QObject, Signal, Qt, QTimer, QTranslator, QLocale,
+                           QLibraryInfo, QCoreApplication, QSettings)
 from ui.splash_screen import SplashScreen
 
 from config import (
@@ -203,8 +205,8 @@ class OCRTranslatorApp:
             try:
                 self._load_with_splash(splash)
             except Exception as e:
-                print(f"[ERROR] {e}")
-                splash.close()
+                print(f"[ERROR MAIN] {e}")
+                splash.show_error(str(e))
 
         threading.Thread(target=_worker, daemon=True).start()
         self.qt_app.exec()
@@ -265,7 +267,7 @@ class OCRTranslatorApp:
 
         threading.Thread(target=self._run_tray, daemon=True).start()
         
-        splash.set_status("Programa listo para usarse.", 1.0)
+        splash.set_status("Programa listo para usarse.", 2.0)
         splash.show_completion_button()
 
     def _run_tray(self):
@@ -288,35 +290,42 @@ class OCRTranslatorApp:
     def _install_keyboard_hook(self):
         self._register_hotkeys()
 
+    def _safe_start_capture(self):
+        """Wrapper que protege el hilo del listener de excepciones."""
+        try:
+            self.start_capture()
+        except Exception as e:
+            print(f"[ERROR HOTKEY CALLBACK] {type(e).__name__}: {e}")
+
     def _register_hotkeys(self):
         try:
             keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] unhook_all_hotkeys falló: {e}")
 
         hotkeys_list = []
         try:
             hotkeys_list.extend(get_capture_hotkeys())
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] get_capture_hotkeys falló: {e}")
 
         for getter in (get_capture_secondary_1, get_capture_secondary_2):
             try:
                 val = getter()
                 if val and val.strip():
                     hotkeys_list.append(val.strip())
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] {getter.__name__} falló: {e}")
 
         registered = []
         for hotkey in hotkeys_list:
             try:
-                keyboard.add_hotkey(hotkey, self.start_capture)
+                keyboard.add_hotkey(hotkey, self._safe_start_capture)
                 registered.append(hotkey)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[ERROR] No se pudo registrar '{hotkey}': {e}")
 
-        print("[OK] Hotkeys registrados:", ", ".join(registered) if registered else "ninguno")
+        print(f"[OK] Hotkeys registrados: {', '.join(registered) if registered else 'ninguno'}")
 
     # ==========================================================
     # BLOQUE: Flujo de Captura y Procesamiento de Resultados

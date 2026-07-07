@@ -1,16 +1,38 @@
 import os
 import gc
 import time
+import logging
 from collections import OrderedDict
+
 
 import cv2
 import numpy as np
 from PIL import ImageGrab, Image, ImageFilter
 
+
 from config import (
     PADDLE_MIN_CONFIDENCE,
     PADDLE_MIN_CONFIDENCE_PIXEL,
 )
+from preferences import (
+    get_ocr_restart_enabled,
+    get_ocr_restart_char_threshold,
+)
+
+# ==========================================================
+# Logger del módulo OCR
+# ==========================================================
+logger = logging.getLogger("ocr_engine")
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] OCR Engine: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 
 # ==========================================================
@@ -113,48 +135,253 @@ class _EngineCache:
 
 
 # ==========================================================
-# Clase Principal -- OCREngine (ONNX Runtime)
+# Clase Principal -- OCREngine (ONNX Runtime con auto-detección GPU)
 # ==========================================================
 class OCREngine:
     _FIXED_DET_LIMIT = 960
-    _GC_EVERY_N_CALLS = 15
+    _GC_EVERY_N_CALLS = 5
     _MAX_THREADS = 4
 
     def __init__(self):
         self._cache = _EngineCache(max_size=1)
         self._engine = None
         self._calls_since_gc = 0
-        
+        self._use_gpu = False
+        self._needs_restart = False
+
         # Como es multilenguaje, usamos una clave fija para la caché
         self._cache_key = ("multilang",)
         self._load_engine()
 
+    # ==========================================================
+    # Detección de soporte GPU (CUDA via ONNX Runtime)
+    # ==========================================================
+    def _detect_gpu_support(self) -> bool:
+        """
+        Detecta si el sistema tiene una GPU compatible con DirectX 12
+        y si onnxruntime-directml está correctamente instalado.
+
+        DirectML no requiere CUDA, cuDNN ni drivers adicionales.
+        Solo necesita onnxruntime-directml (pip install onnxruntime-directml)
+        y una GPU que soporte DirectX 12 (NVIDIA, AMD o Intel).
+        """
+        logger.info("=" * 60)
+        logger.info("Iniciando detección de soporte GPU (DirectML)")
+        logger.info("=" * 60)
+
+        # --- Paso 1: Importar onnxruntime ---
+        try:
+            import onnxruntime as ort
+            try:
+                version = ort.__version__
+            except AttributeError:
+                from importlib.metadata import version as _pkg_version
+                version = _pkg_version("onnxruntime-directml")
+            logger.info(
+                "ONNX Runtime importado correctamente. "
+                f"Versión: {version}"
+            )
+        except ImportError:
+            logger.warning(
+                "No se pudo importar onnxruntime. "
+                "Instálalo con: pip install onnxruntime-directml"
+            )
+            return False
+
+        # --- Paso 2: Verificar providers disponibles ---
+        try:
+            available_providers = ort.get_available_providers()
+        except Exception as e:
+            logger.warning(
+                f"Error al obtener providers disponibles: {e}. "
+                "No se puede verificar soporte GPU."
+            )
+            return False
+
+        logger.info(f"Providers disponibles: {available_providers}")
+
+        if "DmlExecutionProvider" not in available_providers:
+            logger.warning(
+                "DmlExecutionProvider NO está en la lista de providers "
+                "disponibles. Causas probables:\n"
+                "  - onnxruntime-directml no está instalado.\n"
+                "  - Se instaló onnxruntime (CPU) en lugar de "
+                "onnxruntime-directml.\n"
+                "  - La GPU no soporta DirectX 12.\n"
+                "Solución: pip uninstall onnxruntime  &&  "
+                "pip install onnxruntime-directml"
+            )
+            return False
+
+        logger.info(
+            "DmlExecutionProvider está disponible en los providers. "
+            "Continuando verificación..."
+        )
+
+        # --- Paso 3: Test funcional creando una sesión mínima ---
+        logger.info(
+            "Realizando test funcional con sesión DirectML..."
+        )
+        try:
+            from onnx import helper, TensorProto
+
+            opset = helper.make_opsetid("", 17)
+
+            node = helper.make_node("Identity", ["input"], ["output"])
+            graph = helper.make_graph(
+                [node],
+                "MinimalTestGraph",
+                [helper.make_tensor_value_info(
+                    "input", TensorProto.FLOAT, [1, 1]
+                )],
+                [helper.make_tensor_value_info(
+                    "output", TensorProto.FLOAT, [1, 1]
+                )],
+            )
+            model = helper.make_model(graph, opset_imports=[opset])
+            model.ir_version = 9
+
+            sess = ort.InferenceSession(
+                model.SerializeToString(),
+                providers=["DmlExecutionProvider"],
+            )
+            actual_providers = sess.get_providers()
+            del sess
+
+            if "DmlExecutionProvider" not in actual_providers:
+                logger.warning(
+                    "La sesión de prueba se creó pero NO activó "
+                    f"DmlExecutionProvider. Providers activos: "
+                    f"{actual_providers}. El GPU puede no ser compatible "
+                    "con DirectX 12."
+                )
+                return False
+
+            logger.info(
+                "Test funcional EXITOSO. La sesión usó "
+                f"DmlExecutionProvider. Providers activos: "
+                f"{actual_providers}"
+            )
+
+        except ImportError:
+            logger.warning(
+                "El paquete 'onnx' no está instalado. No se puede hacer "
+                "test funcional. Se asume que DirectML funciona basándose "
+                "en la disponibilidad del provider. Instala 'onnx' para "
+                "verificación completa: pip install onnx"
+            )
+            logger.info(
+                "Asumiendo GPU funcional basándose en "
+                "DmlExecutionProvider disponible."
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(
+                f"El test funcional falló: {e}. "
+                "DirectML podría no estar correctamente configurado. "
+                "Cayendo a CPU."
+            )
+            return False
+
+        logger.info("=" * 60)
+        logger.info("GPU DirectML detectada y verificada correctamente")
+        logger.info("=" * 60)
+        return True
+
+    # ==========================================================
+    # Construcción del engine (GPU o CPU)
+    # ==========================================================
     def _build_engine(self):
         from paddleocr import PaddleOCR
 
-        engine_config = {
-            "device_type": "cpu",
-            "providers": ["CPUExecutionProvider"],
-            "graph_optimization_level": 99,
-            "intra_op_num_threads": self._MAX_THREADS,
-            "inter_op_num_threads": 1,
-            "execution_mode": "sequential",
-            "enable_cpu_mem_arena": False,
-            "enable_mem_pattern": False,
-            "log_severity_level": 3,
-        }
+        self._use_gpu = self._detect_gpu_support()
 
-        return PaddleOCR(
-            engine="onnxruntime",
-            engine_config=engine_config,
-            text_detection_model_name="PP-OCRv6_medium_det",
-            text_recognition_model_name="PP-OCRv6_medium_rec",
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            text_det_limit_side_len=self._FIXED_DET_LIMIT,
-            text_det_limit_type="max",
+        if self._use_gpu:
+            logger.info(
+                "Configurando PaddleOCR con ONNX Runtime + "
+                "DmlExecutionProvider (GPU via DirectML)"
+            )
+            engine_config = {
+                "device_type": "dml",
+                "providers": [
+                    "DmlExecutionProvider",
+                    "CPUExecutionProvider",
+                ],
+                "graph_optimization_level": 99,
+                "enable_mem_pattern": False,
+                "execution_mode": "sequential",
+                "log_severity_level": 3,
+            }
+        else:
+            logger.info(
+                "Configurando PaddleOCR con ONNX Runtime + "
+                "CPUExecutionProvider (CPU)"
+            )
+            engine_config = {
+                "device_type": "cpu",
+                "providers": ["CPUExecutionProvider"],
+                "graph_optimization_level": 99,
+                "intra_op_num_threads": self._MAX_THREADS,
+                "inter_op_num_threads": 1,
+                "execution_mode": "sequential",
+                "enable_cpu_mem_arena": False,
+                "enable_mem_pattern": False,
+                "log_severity_level": 3,
+            }
+
+        logger.info(f"engine_config: {engine_config}")
+
+        try:
+            engine = PaddleOCR(
+                engine="onnxruntime",
+                engine_config=engine_config,
+                text_detection_model_name="PP-OCRv6_medium_det",
+                text_recognition_model_name="PP-OCRv6_medium_rec",
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                text_det_limit_side_len=self._FIXED_DET_LIMIT,
+                text_det_limit_type="max",
+            )
+        except Exception as e:
+            if self._use_gpu:
+                logger.warning(
+                    f"Error al inicializar engine con DirectML: {e}. "
+                    "Reintentando con configuración CPU..."
+                )
+                self._use_gpu = False
+                engine_config = {
+                    "device_type": "cpu",
+                    "providers": ["CPUExecutionProvider"],
+                    "graph_optimization_level": 99,
+                    "intra_op_num_threads": self._MAX_THREADS,
+                    "inter_op_num_threads": 1,
+                    "execution_mode": "sequential",
+                    "enable_cpu_mem_arena": False,
+                    "enable_mem_pattern": False,
+                    "log_severity_level": 3,
+                }
+                logger.info(f"engine_config (fallback CPU): {engine_config}")
+                engine = PaddleOCR(
+                    engine="onnxruntime",
+                    engine_config=engine_config,
+                    text_detection_model_name="PP-OCRv6_medium_det",
+                    text_recognition_model_name="PP-OCRv6_medium_rec",
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False,
+                    text_det_limit_side_len=self._FIXED_DET_LIMIT,
+                    text_det_limit_type="max",
+                )
+            else:
+                raise
+
+        logger.info(
+            f"PaddleOCR engine inicializado correctamente. "
+            f"Dispositivo activo: {'GPU (DirectML)' if self._use_gpu else 'CPU'}"
         )
+        return engine
 
     def _load_engine(self) -> None:
         cached = self._cache.get(self._cache_key)
@@ -173,6 +400,13 @@ class OCREngine:
         gc.collect()
 
     def _ensure_engine_ready(self) -> None:
+        if self._needs_restart:
+            logger.info(
+                "Reinicio solicitado por extracción grande anterior. "
+                "Liberando memoria y recargando motor OCR..."
+            )
+            self.release_engine()
+            self._needs_restart = False
         if self._engine is None:
             self._load_engine()
 
@@ -180,6 +414,9 @@ class OCREngine:
         self._calls_since_gc += 1
         if self._calls_since_gc >= self._GC_EVERY_N_CALLS:
             gc.collect()
+            if self._use_gpu:
+                gc.collect()
+                gc.collect()
             self._calls_since_gc = 0
 
     def capture_area(self, x1, y1, x2, y2) -> Image.Image:
@@ -313,7 +550,22 @@ class OCREngine:
 
         processed.close()
         del processed
+
+        if self._use_gpu:
+            gc.collect()
+
         self._maybe_collect()
+
+        char_count = sum(len(b["text"]) for b in raw_blocks)
+        logger.info(f"Caracteres extraídos: {char_count}")
+
+        if get_ocr_restart_enabled() and char_count > get_ocr_restart_char_threshold():
+            logger.warning(
+                f"Extracción grande detectada ({char_count} caracteres > "
+                f"{get_ocr_restart_char_threshold()}). "
+                "Se activará reinicio del motor en la próxima petición."
+            )
+            self._needs_restart = True
 
         if not raw_blocks:
             return ("", []) if return_boxes else ""

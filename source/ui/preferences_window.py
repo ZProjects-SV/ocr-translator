@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
     QLabel, QStackedWidget, QFormLayout, QLineEdit,
     QPushButton, QColorDialog, QFontComboBox, QFrame, QDialog,
-    QAbstractButton, QComboBox,
+    QAbstractButton, QComboBox, QCheckBox,
 )
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QEvent
 from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeySequence
@@ -18,6 +18,8 @@ from preferences import (
     get_selection_color, set_selection_color,
     get_result_font_family, set_result_font_family,
     get_selection_border_width, set_selection_border_width,
+    get_ocr_restart_enabled, set_ocr_restart_enabled,
+    get_ocr_restart_char_threshold, set_ocr_restart_char_threshold,
 )
 from config import (
     APP_NAME, SELECTION_BORDER_WIDTH,
@@ -25,6 +27,7 @@ from config import (
     CAPTURE_HOTKEYS, CAPTURE_SECONDARY_1, CAPTURE_SECONDARY_2,
     SELECTION_COLOR, RESULT_FONT_FAMILY,
     TRANSLATION_LANG_CHOICES, TRANSLATION_LANG_DISPLAY,
+    OCR_RESTART_ENABLED, OCR_RESTART_CHAR_THRESHOLD,
 )
 
 # ==========================================================
@@ -215,12 +218,13 @@ def _lbl_small(text: str) -> QLabel:
 class _StepSpinBox(QWidget):
     valueChanged = Signal(int)
 
-    def __init__(self, min_val=0, max_val=99, suffix="", parent=None):
+    def __init__(self, min_val=0, max_val=99, suffix="", step=1, parent=None):
         super().__init__(parent)
         self._value = min_val
         self._min = min_val
         self._max = max_val
         self._suffix = suffix
+        self._step = step
 
         self._btn_inc = QPushButton("＋")
         self._btn_dec = QPushButton("－")
@@ -241,16 +245,24 @@ class _StepSpinBox(QWidget):
                 }
                 QPushButton:hover   { background-color: #0078d4; border-color: #0078d4; }
                 QPushButton:pressed { background-color: #005fa3; }
+                QPushButton:disabled { background-color: #2a2a2a; color: #555555; border-color: #333333; }
             """)
 
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setMinimumWidth(38)
         self._label.setStyleSheet("""
-            color: #ffffff;
-            background-color: #3a3a3a;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 2px 4px;
+            QLabel {
+                color: #ffffff;
+                background-color: #3a3a3a;
+                border: 1px solid #555555;
+                border-radius: 3px;
+                padding: 2px 4px;
+            }
+            QLabel:disabled {
+                color: #666666;
+                background-color: #2a2a2a;
+                border-color: #333333;
+            }
         """)
 
         btn_col = QVBoxLayout()
@@ -265,8 +277,8 @@ class _StepSpinBox(QWidget):
         row.addWidget(self._label)
         row.addLayout(btn_col)
 
-        self._btn_dec.clicked.connect(lambda: self.setValue(self._value - 1))
-        self._btn_inc.clicked.connect(lambda: self.setValue(self._value + 1))
+        self._btn_dec.clicked.connect(lambda: self.setValue(self._value - self._step))
+        self._btn_inc.clicked.connect(lambda: self.setValue(self._value + self._step))
         self._refresh()
 
     def _refresh(self):
@@ -620,6 +632,31 @@ class PreferencesWindow(QWidget):
         form.addRow(_lbl("Idioma origen"), self._combo_source)
         form.addRow(_lbl("Idioma destino"), self._combo_target)
 
+        self._chk_restart = QCheckBox("Reiniciar motor OCR tras extracción grande")
+        self._chk_restart.setStyleSheet("""
+            QCheckBox { color: #ffffff; spacing: 8px; }
+            QCheckBox::indicator {
+                width: 16px; height: 16px;
+                border: 1px solid #555555; border-radius: 3px;
+                background-color: #3a3a3a;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0078d4; border-color: #0078d4;
+            }
+            QCheckBox::indicator:hover { border-color: #0078d4; }
+            QCheckBox:disabled { color: #666666; }
+            QCheckBox::indicator:disabled { border-color: #333333; background-color: #2a2a2a; }
+        """)
+        self._chk_restart.toggled.connect(self._on_restart_toggled)
+
+        self._spin_restart_threshold = _StepSpinBox(
+            min_val=100, max_val=10000, suffix="", step=100
+        )
+        self._spin_restart_threshold.setFixedWidth(100)
+
+        form.addRow(self._chk_restart)
+        form.addRow(_lbl_small("Umbral de caracteres"), self._spin_restart_threshold)
+
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addSpacing(6)
@@ -791,6 +828,11 @@ class PreferencesWindow(QWidget):
         self.font_combo.currentFontChanged.connect(self._update_reset_btn)
         self.spin_border_width.valueChanged.connect(self._update_preview)
         self.spin_border_width.valueChanged.connect(self._update_reset_btn)
+        self._spin_restart_threshold.valueChanged.connect(self._update_reset_btn)
+        
+    def _on_restart_toggled(self, checked: bool) -> None:
+        self._spin_restart_threshold.setEnabled(checked)
+        self._update_reset_btn()
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.MouseButtonPress and obj in (
@@ -1014,6 +1056,12 @@ class PreferencesWindow(QWidget):
         self._set_combo_data(self._combo_source, get_translation_source())
         self._set_combo_data(self._combo_target, get_translation_target())
 
+        self._chk_restart.blockSignals(True)
+        self._chk_restart.setChecked(get_ocr_restart_enabled())
+        self._chk_restart.blockSignals(False)
+        self._spin_restart_threshold.setValue(get_ocr_restart_char_threshold())
+        self._on_restart_toggled(self._chk_restart.isChecked())
+
         hotkeys = get_capture_hotkeys()
         self.edit_hotkey_main.setText(hotkeys[0] if hotkeys else CAPTURE_HOTKEYS[0])
         self.edit_hotkey_sec1.setText(get_capture_secondary_1())
@@ -1048,6 +1096,9 @@ class PreferencesWindow(QWidget):
         set_translation_source(self._combo_source.currentData() or TRANSLATION_SOURCE)
         set_translation_target(self._combo_target.currentData() or TRANSLATION_TARGET)
 
+        set_ocr_restart_enabled(self._chk_restart.isChecked())
+        set_ocr_restart_char_threshold(self._spin_restart_threshold.value())
+
         main_hk = self.edit_hotkey_main.text().strip() or CAPTURE_HOTKEYS[0]
         set_capture_hotkeys([main_hk])
         set_capture_secondary_1(self.edit_hotkey_sec1.text().strip())
@@ -1062,6 +1113,12 @@ class PreferencesWindow(QWidget):
     def _on_reset(self) -> None:
         self._set_combo_data(self._combo_source, TRANSLATION_SOURCE)
         self._set_combo_data(self._combo_target, TRANSLATION_TARGET)
+
+        self._chk_restart.blockSignals(True)
+        self._chk_restart.setChecked(OCR_RESTART_ENABLED)
+        self._chk_restart.blockSignals(False)
+        self._spin_restart_threshold.setValue(OCR_RESTART_CHAR_THRESHOLD)
+        self._on_restart_toggled(self._chk_restart.isChecked())
 
         self.edit_hotkey_main.setText(CAPTURE_HOTKEYS[0])
         self.edit_hotkey_sec1.setText(CAPTURE_SECONDARY_1)
@@ -1086,6 +1143,8 @@ class PreferencesWindow(QWidget):
         changed = any((
             self._combo_source.currentData() != TRANSLATION_SOURCE,
             self._combo_target.currentData() != TRANSLATION_TARGET,
+            self._chk_restart.isChecked() != OCR_RESTART_ENABLED,
+            self._spin_restart_threshold.value() != OCR_RESTART_CHAR_THRESHOLD,
             self.edit_hotkey_main.text().strip() != CAPTURE_HOTKEYS[0],
             self.edit_hotkey_sec1.text().strip() != CAPTURE_SECONDARY_1,
             self.edit_hotkey_sec2.text().strip() != CAPTURE_SECONDARY_2,

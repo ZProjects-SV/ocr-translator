@@ -1,23 +1,34 @@
+from __future__ import annotations
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel,
     QProgressBar, QApplication, QHBoxLayout, QPushButton, QStyle
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRect, QPointF
-from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage
+from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage, QFontMetrics
 from PIL import Image, ImageFilter
 import numpy as np
 import gc
 
+
 from preferences import get_result_font_family
+
 
 
 # ==========================================================
 # Widget de imagen con zoom y drag
 # ==========================================================
 class ZoomableImageLabel(QWidget):
+
+    _SHADOW_OFFSETS = [
+        (1, 0), (-1, 0), (0, 1), (0, -1),
+        (1, 1), (-1, 1), (1, -1), (-1, -1)
+    ]
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap: QPixmap | None = None
+        self._text_overlays: list | None = None
         self._zoom = 1.0
         self._zoom_min = 0.2
         self._zoom_max = 8.0
@@ -28,8 +39,10 @@ class ZoomableImageLabel(QWidget):
         self.setCursor(Qt.OpenHandCursor)
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
-    def setSourcePixmap(self, pixmap: QPixmap):
+
+    def setSourcePixmap(self, pixmap: QPixmap, text_overlays: list | None = None):
         self._pixmap = pixmap
+        self._text_overlays = text_overlays
         self._zoom = 1.0
         self._offset = QPointF(0, 0)
         self.update()
@@ -41,18 +54,48 @@ class ZoomableImageLabel(QWidget):
 
     def clearPixmaps(self):
         self._pixmap = None
+        self._text_overlays = None
         self.update()
 
-    # --- sin _redraw ni _canvas ni pixmap.scaled ---
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#1a1a1a"))
         if self._pixmap and not self._pixmap.isNull():
             painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
             painter.translate(self._offset)
             painter.scale(self._zoom, self._zoom)
             painter.drawPixmap(0, 0, self._pixmap)
+
+            if self._text_overlays:
+                draw_shadow = self._zoom < 2.0
+                for ov in self._text_overlays:
+                    font = QF(ov['font_family'], ov['font_size'])
+                    painter.setFont(font)
+                    rect = QRect(ov['x'], ov['y'], ov['w'], ov['h'])
+                    text = ov['text']
+
+                    if draw_shadow:
+                        _, _, v, _ = ov['color'].getHsv()
+                        if v < 128:
+                            outline_color = QColor(255, 255, 255, 220)
+                        else:
+                            outline_color = QColor(0, 0, 0, 220)
+                        painter.setPen(QPen(outline_color))
+                        for dx, dy in self._SHADOW_OFFSETS:
+                            painter.drawText(
+                                QRect(rect.x() + dx, rect.y() + dy,
+                                      rect.width(), rect.height()),
+                                Qt.AlignVCenter | Qt.AlignLeft, text
+                            )
+
+                    painter.setPen(QPen(ov['color']))
+                    painter.drawText(rect,
+                                     Qt.AlignVCenter | Qt.AlignLeft, text)
         painter.end()
+
 
     def wheelEvent(self, event: QWheelEvent):
         if not self._pixmap:
@@ -66,11 +109,13 @@ class ZoomableImageLabel(QWidget):
         self._offset = cursor_pos - img_point * self._zoom
         self.update()
 
+
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
             self._drag_active = True
             self._drag_last = QPointF(event.position())
             self.setCursor(Qt.ClosedHandCursor)
+
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if self._drag_active:
@@ -79,10 +124,12 @@ class ZoomableImageLabel(QWidget):
             self._drag_last = QPointF(event.position())
             self.update()
 
+
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
             self._drag_active = False
             self.setCursor(Qt.OpenHandCursor)
+
 
 
 # ==========================================================
@@ -93,8 +140,10 @@ class _Signals(QObject):
     show_result   = Signal(str)
     close_window  = Signal(int)
 
+
     def __init__(self, parent=None):
         super().__init__(parent)
+
 
 
 # ==========================================================
@@ -105,11 +154,13 @@ class _ResultWidget(QWidget):
         super().__init__()
         self._owner = owner
 
+
     def closeEvent(self, event):
         if self._owner is not None:
             self._owner._hard_destroy()
             self._owner = None
         event.accept()
+
 
 
 # ==========================================================
@@ -130,11 +181,13 @@ class UnifiedResultWindow:
         self._signals: _Signals | None = None
         self._pixmap_before: QPixmap | None = None
         self._pixmap_after: QPixmap | None = None
+        self._text_overlays: list | None = None
         self._showing_after = True
         self._zoom_label: ZoomableImageLabel | None = None
         self._toggle_btn: QPushButton | None = None
         self._reset_btn: QPushButton | None = None
         self._close_btn: QPushButton | None = None
+
 
     # ==========================================================
     # Destrucción determinista
@@ -163,6 +216,7 @@ class UnifiedResultWindow:
 
         self._pixmap_before = None
         self._pixmap_after = None
+        self._text_overlays = None
 
         if self._image is not None:
             try:
@@ -203,6 +257,7 @@ class UnifiedResultWindow:
 
         gc.collect()
 
+
     # ==========================================================
     # API Pública
     # ==========================================================
@@ -234,9 +289,11 @@ class UnifiedResultWindow:
         self._show_loading_content()
         return self.window
 
+
     def update_status(self, message):
         if self._signals and not self.is_closed:
             self._signals.update_status.emit(message)
+
 
     def show_result(self, translated_text, image=None, blocks=None):
         self._image = image
@@ -244,12 +301,15 @@ class UnifiedResultWindow:
         if self._signals and not self.is_closed:
             self._signals.show_result.emit(translated_text)
 
+
     def close_after(self, ms: int):
         if self._signals and not self.is_closed:
             self._signals.close_window.emit(ms)
 
+
     def _delayed_close(self, ms: int):
         QTimer.singleShot(ms, self.close)
+
 
     def close(self):
         if self.is_closed or not self.window:
@@ -259,9 +319,11 @@ class UnifiedResultWindow:
         except Exception:
             self._hard_destroy()
 
+
     def run(self):
         if self.window and not self.is_closed:
             self.window.show()
+
 
     # ==========================================================
     # Slots Qt
@@ -270,6 +332,7 @@ class UnifiedResultWindow:
         if self.is_closed or not hasattr(self, '_status_label'):
             return
         self._status_label.setText(message)
+
 
     def _do_show_result(self, translated_text):
         if self.is_closed or not self.window:
@@ -288,6 +351,7 @@ class UnifiedResultWindow:
         self._show_result_content(translated_text, self._image, self._blocks)
         self.window.setVisible(True)
 
+
     # ==========================================================
     # Handlers de botones (sin lambda closures)
     # ==========================================================
@@ -295,8 +359,10 @@ class UnifiedResultWindow:
         if self._zoom_label:
             self._zoom_label.resetView()
 
+
     def _on_close_clicked(self):
         self.close()
+
 
     # ==========================================================
     # Helpers de imagen
@@ -322,7 +388,24 @@ class UnifiedResultWindow:
             pixels = region.reshape(-1, 3)
         avg = np.mean(pixels, axis=0).astype(int)
         del region, gray, mask, pixels
-        return QColor(int(avg[0]), int(avg[1]), int(avg[2]))
+
+        # --- Boost de saturación y brillo en HSV ---
+        color = QColor(int(avg[0]), int(avg[1]), int(avg[2]))
+        h, s, v, a = color.getHsv()
+        if s < 40:
+            if median_brightness < 128:
+                v = min(255, int(v * 1.4) + 80)
+                s = min(255, int(s * 2.0) + 30)
+            else:
+                v = max(0, int(v * 0.7) - 30)
+                s = min(255, int(s * 2.0) + 30)
+        else:
+            s = min(255, int(s * 1.5) + 30)
+            v = min(255, int(v * 1.2) + 25)
+        color.setHsv(h, s, v, a)
+        del avg
+        return color
+
 
     @staticmethod
     def _pil_to_pixmap(image: Image.Image) -> QPixmap:
@@ -335,6 +418,7 @@ class UnifiedResultWindow:
         del data, qimg, rgba
         return pixmap
 
+
     @staticmethod
     def _build_original_pixmap(image: Image.Image, disp_w: int, disp_h: int) -> QPixmap:
         resized = image.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
@@ -343,7 +427,8 @@ class UnifiedResultWindow:
         del resized
         return px
 
-    def _build_translated_pixmap(self, image, blocks, translated_lines, disp_w, disp_h, scale_factor):
+
+    def _build_blurred_background(self, image, blocks, disp_w, disp_h):
         img_w, img_h = image.size
 
         blurred = image.copy()
@@ -369,13 +454,16 @@ class UnifiedResultWindow:
         pixmap = self._pil_to_pixmap(blurred_resized)
         blurred_resized.close()
         del blurred_resized
+        return pixmap
 
+
+    def _build_text_overlays(self, image, blocks, translated_lines, scale_factor):
         rgb_image = image.convert("RGB")
         img_array = np.array(rgb_image)
         rgb_image.close()
         del rgb_image
 
-        painter = QPainter(pixmap)
+        overlays = []
         line_idx = 0
         for block in blocks:
             if line_idx >= len(translated_lines):
@@ -390,22 +478,28 @@ class UnifiedResultWindow:
             line_idx += 1
 
             font_size = max(8, int(box_h * 0.8))
-            font = QF(get_result_font_family(), font_size)
-            painter.setFont(font)
-            fm = painter.fontMetrics()
+            font_family = get_result_font_family()
+            font = QF(font_family, font_size)
+            fm = QFontMetrics(font)
             while font_size > 6 and fm.horizontalAdvance(text) > box_w - 4:
                 font_size -= 1
-                font = QF(get_result_font_family(), font_size)
-                painter.setFont(font)
-                fm = painter.fontMetrics()
+                font = QF(font_family, font_size)
+                fm = QFontMetrics(font)
 
-            painter.setPen(QPen(text_color))
-            painter.drawText(QRect(rx1 + 2, ry1, box_w - 4, box_h),
-                             Qt.AlignVCenter | Qt.AlignLeft, text)
+            overlays.append({
+                'text': text,
+                'x': rx1 + 2,
+                'y': ry1,
+                'w': box_w - 4,
+                'h': box_h,
+                'color': text_color,
+                'font_family': font_family,
+                'font_size': font_size,
+            })
 
-        painter.end()
         del img_array
-        return pixmap
+        return overlays
+
 
     # ==========================================================
     # Toggle antes/después
@@ -414,9 +508,7 @@ class UnifiedResultWindow:
         self._showing_after = not self._showing_after
         if self._showing_after:
             if self._zoom_label:
-                self._zoom_label.setSourcePixmap(self._pixmap_after)
-            if self._toggle_btn:
-                self._toggle_btn.setText("Ver original")
+                self._zoom_label.setSourcePixmap(self._pixmap_after, self._text_overlays)
         else:
             if self._pixmap_before is None and self._image is not None:
                 img_w, img_h = self._image.size
@@ -433,6 +525,7 @@ class UnifiedResultWindow:
                 self._zoom_label.setSourcePixmap(self._pixmap_before)
             if self._toggle_btn:
                 self._toggle_btn.setText("Ver traducción")
+
 
     # ==========================================================
     # Renderizado de contenido
@@ -475,6 +568,7 @@ class UnifiedResultWindow:
         hint.setAlignment(Qt.AlignLeft)
         self._layout.addWidget(hint)
 
+
     def _show_result_content(self, translated_text, image=None, blocks=None):
         if image and blocks:
             img_w, img_h = image.size
@@ -509,13 +603,16 @@ class UnifiedResultWindow:
             scale_factor = disp_w / img_w
             translated_lines = [l for l in translated_text.split('\n') if l.strip()]
 
-            self._pixmap_after = self._build_translated_pixmap(
-                image, blocks, translated_lines, disp_w, disp_h, scale_factor
+            self._pixmap_after = self._build_blurred_background(
+                image, blocks, disp_w, disp_h
+            )
+            self._text_overlays = self._build_text_overlays(
+                image, blocks, translated_lines, scale_factor
             )
 
             self._zoom_label = ZoomableImageLabel()
             self._zoom_label.setFixedSize(disp_w, disp_h)
-            self._zoom_label.setSourcePixmap(self._pixmap_after)
+            self._zoom_label.setSourcePixmap(self._pixmap_after, self._text_overlays)
             self._showing_after = True
 
             img_layout = QHBoxLayout()
