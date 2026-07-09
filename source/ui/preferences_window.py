@@ -3,65 +3,56 @@
 #
 # This file is part of OCR Translator.
 # OCR Translator is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
+# it under the terms of the GNU Affero General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
 # OCR Translator is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
+# GNU Affero General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License
+# You should have received a copy of the GNU Affero General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
-    QLabel, QStackedWidget, QFormLayout, QLineEdit, QCheckBox,
+    QLabel, QStackedWidget, QFormLayout, QLineEdit,
     QPushButton, QColorDialog, QFontComboBox, QFrame, QDialog,
-    QAbstractButton, QComboBox, QMessageBox,
+    QAbstractButton, QComboBox, QCheckBox,
 )
-from PySide6.QtCore import Qt, Signal, QObject, QTimer, QEvent
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QEvent, QCoreApplication
 from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeySequence
 
 from preferences import (
     get_translation_source, set_translation_source,
     get_translation_target, set_translation_target,
-    get_translation_cache_enabled, set_translation_cache_enabled,
     get_capture_hotkeys, set_capture_hotkeys,
     get_capture_secondary_1, set_capture_secondary_1,
     get_capture_secondary_2, set_capture_secondary_2,
     get_selection_color, set_selection_color,
     get_result_font_family, set_result_font_family,
     get_selection_border_width, set_selection_border_width,
+    get_ocr_restart_enabled, set_ocr_restart_enabled,
+    get_ocr_restart_char_threshold, set_ocr_restart_char_threshold,
 )
 from config import (
     APP_NAME, SELECTION_BORDER_WIDTH,
-    TRANSLATION_SOURCE, TRANSLATION_TARGET, TRANSLATION_CACHE_ENABLED,
+    TRANSLATION_SOURCE, TRANSLATION_TARGET,
     CAPTURE_HOTKEYS, CAPTURE_SECONDARY_1, CAPTURE_SECONDARY_2,
     SELECTION_COLOR, RESULT_FONT_FAMILY,
     TRANSLATION_LANG_CHOICES, TRANSLATION_LANG_DISPLAY,
+    OCR_RESTART_ENABLED, OCR_RESTART_CHAR_THRESHOLD,
 )
-from core.ocr_engine import OCREngine
 
 # ==========================================================
-# BLOQUE: Estilos Visuales Reutilizables (CSS/Qt StyleSheets)
+# BLOQUE: Estilos Visuales Reutilizables
 # ==========================================================
-_STYLE_LABEL   = "color: #ffffff;"
+_STYLE_LABEL = "color: #ffffff;"
 _STYLE_SUBLABEL = "color: #c0c0c0; font-size: 11px;"
-_STYLE_TITLE   = "color: #ffffff; font-size: 14px; font-weight: 600;"
-_STYLE_INPUT   = """
-    QLineEdit, QSpinBox, QFontComboBox {
-        background-color: #3a3a3a;
-        color: #ffffff;
-        border: 1px solid #555555;
-        border-radius: 4px;
-        padding: 4px 6px;
-    }
-    QLineEdit:focus, QSpinBox:focus, QFontComboBox:focus {
-        border: 1px solid #0078d4;
-    }
-"""
+_STYLE_TITLE = "color: #ffffff; font-size: 14px; font-weight: 600;"
+
 _STYLE_BTN_COLOR = """
     QPushButton {
         border: 2px solid #555555;
@@ -71,6 +62,7 @@ _STYLE_BTN_COLOR = """
     }
     QPushButton:hover { border-color: #0078d4; }
 """
+
 _STYLE_SIDEBAR = """
     QListWidget {
         background-color: #202020;
@@ -83,7 +75,9 @@ _STYLE_SIDEBAR = """
         color: #ffffff;
     }
 """
+
 _STYLE_SEPARATOR = "background-color: #444444;"
+
 _STYLE_BTN_SAVE = """
     QPushButton {
         background-color: #0078d4;
@@ -97,6 +91,7 @@ _STYLE_BTN_SAVE = """
     QPushButton:hover { background-color: #1084d8; }
     QPushButton:pressed { background-color: #005fa3; }
 """
+
 _STYLE_BTN_CANCEL = """
     QPushButton {
         background-color: #3a3a3a;
@@ -107,6 +102,7 @@ _STYLE_BTN_CANCEL = """
     }
     QPushButton:hover { background-color: #484848; }
 """
+
 _STYLE_BTN_RESET = """
     QPushButton {
         background-color: #3a3a3a;
@@ -131,6 +127,7 @@ _STYLE_BTN_RESET = """
         color: #555555;
     }
 """
+
 _STYLE_FONTCOMBO = """
     QFontComboBox {
         background-color: #3a3a3a;
@@ -149,6 +146,7 @@ _STYLE_FONTCOMBO = """
         border: 1px solid #555555;
     }
 """
+
 _STYLE_LANG_COMBO = """
     QComboBox {
         background-color: #3a3a3a;
@@ -167,7 +165,8 @@ _STYLE_LANG_COMBO = """
     }
     QComboBox::down-arrow {
         image: none;
-        width: 0; height: 0;
+        width: 0;
+        height: 0;
         border-left: 4px solid transparent;
         border-right: 4px solid transparent;
         border-top: 6px solid #aaaaaa;
@@ -186,33 +185,66 @@ _STYLE_LANG_COMBO = """
         min-height: 24px;
     }
 """
-# (Dependencias/Interacciones: Bloque pasivo. Solo provee de hojas de estilo a los widgets que se construyen en los siguientes bloques.)
+
+_STYLE_HOTKEY_EDIT = """
+    QLineEdit {
+        background-color: #3a3a3a;
+        color: #ffffff;
+        border: 1px solid #555555;
+        border-radius: 4px;
+        padding: 4px 6px;
+    }
+    QLineEdit:hover { border-color: #0078d4; }
+"""
+
+_STYLE_HOTKEY_CLEAR = """
+    QPushButton {
+        background-color: #3a3a3a;
+        color: #888888;
+        border: 1px solid #444444;
+        border-radius: 4px;
+        font-size: 10px;
+    }
+    QPushButton:hover {
+        background-color: #5a2020;
+        color: #ff6666;
+        border-color: #883333;
+    }
+"""
 
 
 # ==========================================================
-# BLOQUE: Widgets Utilitarios Personalizados
+# BLOQUE: Helpers
 # ==========================================================
-class _Signals(QObject):
-    closed = Signal()
+def _lbl(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(_STYLE_LABEL)
+    return lbl
 
-    def __init__(self):
-        super().__init__()
+
+def _lbl_small(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(_STYLE_SUBLABEL)
+    return lbl
 
 
+# ==========================================================
+# BLOQUE: Widgets Utilitarios
+# ==========================================================
 class _StepSpinBox(QWidget):
-    """Reemplazo de QSpinBox con botones + (arriba) y − (abajo) apilados a la derecha."""
     valueChanged = Signal(int)
 
-    def __init__(self, min_val=0, max_val=99, suffix="", parent=None):
+    def __init__(self, min_val=0, max_val=99, suffix="", step=1, parent=None):
         super().__init__(parent)
-        self._value  = min_val
-        self._min    = min_val
-        self._max    = max_val
+        self._value = min_val
+        self._min = min_val
+        self._max = max_val
         self._suffix = suffix
+        self._step = step
 
         self._btn_inc = QPushButton("＋")
         self._btn_dec = QPushButton("－")
-        self._label   = QLabel()
+        self._label = QLabel()
 
         for btn in (self._btn_dec, self._btn_inc):
             btn.setFixedSize(16, 12)
@@ -229,16 +261,24 @@ class _StepSpinBox(QWidget):
                 }
                 QPushButton:hover   { background-color: #0078d4; border-color: #0078d4; }
                 QPushButton:pressed { background-color: #005fa3; }
+                QPushButton:disabled { background-color: #2a2a2a; color: #555555; border-color: #333333; }
             """)
 
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setMinimumWidth(38)
         self._label.setStyleSheet("""
-            color: #ffffff;
-            background-color: #3a3a3a;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 2px 4px;
+            QLabel {
+                color: #ffffff;
+                background-color: #3a3a3a;
+                border: 1px solid #555555;
+                border-radius: 3px;
+                padding: 2px 4px;
+            }
+            QLabel:disabled {
+                color: #666666;
+                background-color: #2a2a2a;
+                border-color: #333333;
+            }
         """)
 
         btn_col = QVBoxLayout()
@@ -253,8 +293,8 @@ class _StepSpinBox(QWidget):
         row.addWidget(self._label)
         row.addLayout(btn_col)
 
-        self._btn_dec.clicked.connect(lambda: self.setValue(self._value - 1))
-        self._btn_inc.clicked.connect(lambda: self.setValue(self._value + 1))
+        self._btn_dec.clicked.connect(lambda: self.setValue(self._value - self._step))
+        self._btn_inc.clicked.connect(lambda: self.setValue(self._value + self._step))
         self._refresh()
 
     def _refresh(self):
@@ -276,12 +316,8 @@ class _StepSpinBox(QWidget):
         self._min, self._max = mn, mx
         self.setValue(self._value)
 
-    def setFixedWidth(self, w: int):
-        pass
-
 
 class _HotkeyDialog(QDialog):
-    """Dialogo modal para asignar un hotkey."""
     _MODIFIER_KEYS = {
         Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt,
         Qt.Key_Meta, Qt.Key_AltGr,
@@ -289,7 +325,7 @@ class _HotkeyDialog(QDialog):
 
     def __init__(self, current: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Asignar atajo")
+        self.setWindowTitle(QCoreApplication.translate('Preferences', 'Assign shortcut'))
         self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         self.setFixedSize(360, 220)
         self.setStyleSheet("background-color: #2a2a2a; color: #ffffff;")
@@ -300,9 +336,9 @@ class _HotkeyDialog(QDialog):
         self._waiting: bool = False
 
         parts = [p.strip().lower() for p in current.split("+")] if current else []
-        self._init_ctrl  = "ctrl"  in parts
+        self._init_ctrl = "ctrl" in parts
         self._init_shift = "shift" in parts
-        self._init_alt   = "alt"   in parts
+        self._init_alt = "alt" in parts
         mod_names = {"ctrl", "shift", "alt", "meta"}
         base_parts = [p for p in parts if p not in mod_names]
         self._base_key = base_parts[-1] if base_parts else ""
@@ -314,12 +350,12 @@ class _HotkeyDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 14)
         layout.setSpacing(12)
 
-        lbl_mods = QLabel("Modificadores:")
-        lbl_mods.setStyleSheet("color: #c0c0c0; font-size: 11px;")
+        lbl_mods = QLabel(QCoreApplication.translate('Preferences', 'Modifiers:'))
+        lbl_mods.setStyleSheet(_STYLE_SUBLABEL)
 
-        self._chk_ctrl  = self._make_mod_btn("Ctrl",  self._init_ctrl)
+        self._chk_ctrl = self._make_mod_btn("Ctrl", self._init_ctrl)
         self._chk_shift = self._make_mod_btn("Shift", self._init_shift)
-        self._chk_alt   = self._make_mod_btn("Alt",   self._init_alt)
+        self._chk_alt = self._make_mod_btn("Alt", self._init_alt)
 
         mod_row = QHBoxLayout()
         mod_row.setSpacing(8)
@@ -328,15 +364,15 @@ class _HotkeyDialog(QDialog):
         mod_row.addWidget(self._chk_alt)
         mod_row.addStretch(1)
 
-        lbl_key = QLabel("Tecla base (haz clic en el campo y presiona una tecla):")
-        lbl_key.setStyleSheet("color: #c0c0c0; font-size: 11px;")
+        lbl_key = QLabel(QCoreApplication.translate('Preferences', 'Base key (click the field and press a key):'))
+        lbl_key.setStyleSheet(_STYLE_SUBLABEL)
         lbl_key.setWordWrap(True)
 
         self._edit = QLineEdit()
         self._edit.setText(self._base_key)
         self._edit.setReadOnly(True)
         self._edit.setAlignment(Qt.AlignCenter)
-        self._edit.setPlaceholderText("Haz clic aqui para capturar...")
+        self._edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Click here to capture...'))
         self._edit.setCursor(Qt.PointingHandCursor)
         self._edit.setStyleSheet("""
             QLineEdit {
@@ -353,12 +389,12 @@ class _HotkeyDialog(QDialog):
         self._edit.setFocusPolicy(Qt.NoFocus)
         self._edit.installEventFilter(self)
 
-        lbl_sub = QLabel("Los clics del mouse no se registran como atajo.")
+        lbl_sub = QLabel(QCoreApplication.translate('Preferences', 'Mouse clicks are not registered as shortcuts.'))
         lbl_sub.setStyleSheet("color: #555555; font-size: 10px;")
         lbl_sub.setAlignment(Qt.AlignCenter)
 
-        btn_ok     = QPushButton("Aceptar")
-        btn_cancel = QPushButton("Cancelar")
+        btn_ok = QPushButton(QCoreApplication.translate('Preferences', 'Accept'))
+        btn_cancel = QPushButton(QCoreApplication.translate('Preferences', 'Cancel'))
         btn_ok.setStyleSheet(_STYLE_BTN_SAVE)
         btn_cancel.setStyleSheet(_STYLE_BTN_CANCEL)
         btn_ok.setCursor(Qt.PointingHandCursor)
@@ -415,10 +451,10 @@ class _HotkeyDialog(QDialog):
         self._edit.style().unpolish(self._edit)
         self._edit.style().polish(self._edit)
         if waiting:
-            self._edit.setPlaceholderText("Presiona una tecla...")
+            self._edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Press a key...'))
             self._edit.setText("")
         else:
-            self._edit.setPlaceholderText("Haz clic aqui para capturar...")
+            self._edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Click here to capture...'))
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
@@ -447,9 +483,12 @@ class _HotkeyDialog(QDialog):
 
     def _on_accept(self) -> None:
         parts = []
-        if self._chk_ctrl.isChecked():  parts.append("ctrl")
-        if self._chk_shift.isChecked(): parts.append("shift")
-        if self._chk_alt.isChecked():   parts.append("alt")
+        if self._chk_ctrl.isChecked():
+            parts.append("ctrl")
+        if self._chk_shift.isChecked():
+            parts.append("shift")
+        if self._chk_alt.isChecked():
+            parts.append("alt")
         if self._base_key:
             parts.append(self._base_key)
         self._result = "+".join(parts)
@@ -457,36 +496,38 @@ class _HotkeyDialog(QDialog):
 
     def get_result(self) -> str:
         return self._result
-# (Dependencias/Interacciones: Son componentes auxiliares que se incrustan dentro de PreferencesWindow para manejar el SpinBox personalizado y la captura de teclas.)
 
 
 # ==========================================================
-# BLOQUE: Ventana Principal de Preferencias (UI y Estructura)
+# BLOQUE: Ventana Principal de Preferencias
 # ==========================================================
 class PreferencesWindow(QWidget):
-    download_model_requested = Signal(str)
-    
+    closed = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"{APP_NAME} – Preferencias")
-        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.setWindowTitle(f"{APP_NAME} – {QCoreApplication.translate('Preferences', 'Preferences')}")
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WA_QuitOnClose, False)
         self.setWindowFlags(Qt.Window)
         self.setMinimumSize(620, 420)
         self.setStyleSheet("background-color: #2a2a2a;")
 
         self._selection_color: str = get_selection_color()
         self._rainbow_active: bool = self._selection_color == "rainbow"
-        self._rainbow_hue: int     = 0
-        self._rainbow_timer        = QTimer(self)
+        self._rainbow_hue: int = 0
+
+        self._rainbow_timer = QTimer(self)
         self._rainbow_timer.setInterval(30)
         self._rainbow_timer.timeout.connect(self._tick_rainbow)
 
-        self._sig = _Signals()
-        self.closed = self._sig.closed
-
         self._build_ui()
+        self._connect_change_signals()
         self._load_values()
 
+    # ------------------------------------------------------
+    # UI base
+    # ------------------------------------------------------
     def _build_ui(self) -> None:
         self.sections = QListWidget()
         self.sections.setFixedWidth(150)
@@ -497,13 +538,14 @@ class PreferencesWindow(QWidget):
 
         self.pages = QStackedWidget()
         self.pages.setStyleSheet("background-color: #2a2a2a;")
-        self.pages.addWidget(self._create_translation_page())  # 0
-        self.pages.addWidget(self._create_capture_page())      # 1
-        self.pages.addWidget(self._create_appearance_page())   # 2
+        self.pages.addWidget(self._create_translation_page())
+        self.pages.addWidget(self._create_capture_page())
+        self.pages.addWidget(self._create_appearance_page())
 
-        self._add_section("Traducción", 0)
-        self._add_section("Captura",    1)
-        self._add_section("Apariencia", 2)
+        self._add_section(QCoreApplication.translate('Preferences', 'Translation'), 0)
+        self._add_section(QCoreApplication.translate('Preferences', 'Capture'), 1)
+        self._add_section(QCoreApplication.translate('Preferences', 'Appearance'), 2)
+
         self.sections.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sections.setCurrentRow(0)
 
@@ -512,14 +554,14 @@ class PreferencesWindow(QWidget):
         sep.setFixedHeight(1)
         sep.setStyleSheet(_STYLE_SEPARATOR)
 
-        btn_save   = QPushButton("Guardar")
-        btn_cancel = QPushButton("Cancelar")
+        btn_save = QPushButton(QCoreApplication.translate('Preferences', 'Save'))
+        btn_cancel = QPushButton(QCoreApplication.translate('Preferences', 'Cancel'))
         btn_save.setStyleSheet(_STYLE_BTN_SAVE)
         btn_cancel.setStyleSheet(_STYLE_BTN_CANCEL)
         btn_save.clicked.connect(self._on_save)
         btn_cancel.clicked.connect(self._do_close)
 
-        self.btn_reset = QPushButton("Restablecer")
+        self.btn_reset = QPushButton(QCoreApplication.translate('Preferences', 'Reset'))
         self.btn_reset.setStyleSheet(_STYLE_BTN_RESET)
         self.btn_reset.clicked.connect(self._on_reset)
         self.btn_reset.setEnabled(False)
@@ -551,7 +593,7 @@ class PreferencesWindow(QWidget):
 
     @staticmethod
     def _base_page():
-        page   = QWidget()
+        page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
@@ -574,77 +616,62 @@ class PreferencesWindow(QWidget):
         form.setSpacing(10)
         form.setHorizontalSpacing(14)
         return form
-# (Dependencias/Interacciones: Construye la estructura base. Depende de los bloques de estilo y de los métodos de creación de páginas.)
 
+    def _make_lang_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.setStyleSheet(_STYLE_LANG_COMBO)
+        combo.setFixedWidth(220)
+        for code in TRANSLATION_LANG_CHOICES:
+            combo.addItem(TRANSLATION_LANG_DISPLAY[code], code)
+        return combo
 
-# ==========================================================
-# BLOQUE: Construcción de Páginas (Traducción, Captura, Apariencia)
-# ==========================================================
+    def _set_combo_data(self, combo: QComboBox, value) -> None:
+        idx = combo.findData(value)
+        combo.blockSignals(True)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    # ------------------------------------------------------
+    # Páginas
+    # ------------------------------------------------------
     def _create_translation_page(self) -> QWidget:
         page, layout = self._base_page()
-        title, subtitle = self._make_header("Traducción", "Configura los idiomas y el comportamiento del traductor.")
+        title, subtitle = self._make_header(
+            QCoreApplication.translate('Preferences', 'Translation'),
+            QCoreApplication.translate('Preferences', 'Configure the languages and behavior of the translator.')
+        )
         form = self._make_form()
 
-        self._combo_source = QComboBox()
-        self._combo_source.setStyleSheet(_STYLE_LANG_COMBO)
-        self._combo_source.setFixedWidth(220)
-        for code in TRANSLATION_LANG_CHOICES:
-            self._combo_source.addItem(TRANSLATION_LANG_DISPLAY[code], code)
+        self._combo_source = self._make_lang_combo()
+        self._combo_target = self._make_lang_combo()
 
-        self._combo_target = QComboBox()
-        self._combo_target.setStyleSheet(_STYLE_LANG_COMBO)
-        self._combo_target.setFixedWidth(220)
-        for code in TRANSLATION_LANG_CHOICES:
-            self._combo_target.addItem(TRANSLATION_LANG_DISPLAY[code], code)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Source language')), self._combo_source)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Target language')), self._combo_target)
 
-        self._chk_cache = QCheckBox("Habilitar caché de traducciones en memoria")
-        self._chk_cache.setStyleSheet(_STYLE_LABEL)
+        self._chk_restart = QCheckBox(QCoreApplication.translate('Preferences', 'Restart OCR engine after large extraction'))
+        self._chk_restart.setStyleSheet("""
+            QCheckBox { color: #ffffff; spacing: 8px; }
+            QCheckBox::indicator {
+                width: 16px; height: 16px;
+                border: 1px solid #555555; border-radius: 3px;
+                background-color: #3a3a3a;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0078d4; border-color: #0078d4;
+            }
+            QCheckBox::indicator:hover { border-color: #0078d4; }
+            QCheckBox:disabled { color: #666666; }
+            QCheckBox::indicator:disabled { border-color: #333333; background-color: #2a2a2a; }
+        """)
+        self._chk_restart.toggled.connect(self._on_restart_toggled)
 
-        self._prev_source_index = 0
-        self._pending_download_code  = None
-        self._pending_download_index = None
+        self._spin_restart_threshold = _StepSpinBox(
+            min_val=100, max_val=10000, suffix="", step=100
+        )
+        self._spin_restart_threshold.setFixedWidth(100)
 
-        def _on_source_changed(new_index: int):
-            new_code = self._combo_source.itemData(new_index)
-            cur_code = self._combo_source.itemData(self._prev_source_index)
-
-            if new_code == cur_code:
-                return
-
-            if OCREngine.is_model_downloaded(new_code):
-                self._prev_source_index = new_index
-                self._update_reset_btn()
-                return
-
-            lang_name = TRANSLATION_LANG_DISPLAY.get(new_code, new_code)
-            msg = QMessageBox(self)
-            msg.setWindowTitle("Descargar recursos de idioma")
-            msg.setText(
-                f"El idioma <b>{lang_name}</b> requiere descargar "
-                f"un modelo OCR adicional (~10–15 MB).<br><br>"
-                f"¿Deseas descargarlo ahora?"
-            )
-            msg.setIcon(QMessageBox.Question)
-            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-            msg.setDefaultButton(QMessageBox.Yes)
-
-            if msg.exec() == QMessageBox.Yes:
-                self._pending_download_code  = new_code
-                self._pending_download_index = new_index
-                self._combo_source.blockSignals(True)
-                self._combo_source.setCurrentIndex(self._prev_source_index)
-                self._combo_source.blockSignals(False)
-                self.download_model_requested.emit(new_code)
-            else:
-                self._combo_source.blockSignals(True)
-                self._combo_source.setCurrentIndex(self._prev_source_index)
-                self._combo_source.blockSignals(False)
-
-        self._combo_source.currentIndexChanged.connect(_on_source_changed)
-
-        form.addRow(_lbl("Idioma origen"),  self._combo_source)
-        form.addRow(_lbl("Idioma destino"), self._combo_target)
-        form.addRow("",                     self._chk_cache)
+        form.addRow(self._chk_restart)
+        form.addRow(_lbl_small("Umbral de caracteres"), self._spin_restart_threshold)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -655,18 +682,24 @@ class PreferencesWindow(QWidget):
 
     def _create_capture_page(self) -> QWidget:
         page, layout = self._base_page()
-        title, subtitle = self._make_header("Captura", "Atajos de teclado para iniciar la captura y traducción.")
+        title, subtitle = self._make_header(
+            QCoreApplication.translate('Preferences', 'Capture'),
+            QCoreApplication.translate('Preferences', 'Keyboard shortcuts to start capture and translation.')
+        )
         form = self._make_form()
 
         self.edit_hotkey_main = self._make_hotkey_field()
-        self.edit_hotkey_sec1 = self._make_hotkey_field(clearable=True)
-        self.edit_hotkey_sec2 = self._make_hotkey_field(clearable=True)
+        self.edit_hotkey_sec1 = self._make_hotkey_field()
+        self.edit_hotkey_sec2 = self._make_hotkey_field()
 
-        form.addRow(_lbl("Atajo de captura:"),            self._hotkey_row(self.edit_hotkey_main))
-        form.addRow(_lbl("Atajo de captura adicional:"),  self._hotkey_row(self.edit_hotkey_sec1, clearable=True))
-        form.addRow(_lbl("Atajo de captura adicional:"),  self._hotkey_row(self.edit_hotkey_sec2, clearable=True))
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Capture shortcut')), self._hotkey_row(self.edit_hotkey_main))
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Additional shortcut 1')), self._hotkey_row(self.edit_hotkey_sec1, clearable=True))
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Additional shortcut 2')), self._hotkey_row(self.edit_hotkey_sec2, clearable=True))
 
-        hint = QLabel("Haz clic en el campo para asignar una tecla o combinación. Los clics del mouse no se aceptan como atajo.")
+        hint = QLabel(
+            QCoreApplication.translate('Preferences', 'Click on the field to assign a key or combination. '
+                                                      'Mouse clicks are not accepted as shortcuts.')
+        )
         hint.setStyleSheet(_STYLE_SUBLABEL)
         hint.setWordWrap(True)
 
@@ -678,23 +711,14 @@ class PreferencesWindow(QWidget):
         layout.addStretch(1)
         return page
 
-    def _make_hotkey_field(self, clearable: bool = False) -> QLineEdit:
+    def _make_hotkey_field(self) -> QLineEdit:
         edit = QLineEdit()
         edit.setReadOnly(True)
         edit.setFixedWidth(200)
-        edit.setPlaceholderText("Sin asignar")
+        edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Not assigned'))
         edit.setCursor(Qt.PointingHandCursor)
         edit.setAlignment(Qt.AlignCenter)
-        edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #3a3a3a;
-                color: #ffffff;
-                border: 1px solid #555555;
-                border-radius: 4px;
-                padding: 4px 6px;
-            }
-            QLineEdit:hover { border-color: #0078d4; }
-        """)
+        edit.setStyleSheet(_STYLE_HOTKEY_EDIT)
         edit.installEventFilter(self)
         return edit
 
@@ -709,63 +733,43 @@ class PreferencesWindow(QWidget):
             btn_clear = QPushButton("✕")
             btn_clear.setFixedSize(24, 24)
             btn_clear.setCursor(Qt.PointingHandCursor)
-            btn_clear.setToolTip("Limpiar atajo")
-            btn_clear.setStyleSheet("""
-                QPushButton {
-                    background-color: #3a3a3a; color: #888888;
-                    border: 1px solid #444444; border-radius: 4px; font-size: 10px;
-                }
-                QPushButton:hover {
-                    background-color: #5a2020; color: #ff6666; border-color: #883333;
-                }
-            """)
-            btn_clear.clicked.connect(lambda: (edit.setText(""), self._update_reset_btn()))
+            btn_clear.setToolTip(QCoreApplication.translate('Preferences', 'Clear shortcut'))
+            btn_clear.setStyleSheet(_STYLE_HOTKEY_CLEAR)
+            btn_clear.clicked.connect(lambda: self._clear_hotkey(edit))
             row.addWidget(btn_clear)
 
         row.addStretch(1)
         return container
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if (
-            event.type() == QEvent.MouseButtonPress
-            and obj in (self.edit_hotkey_main, self.edit_hotkey_sec1, self.edit_hotkey_sec2)
-        ):
-            self._open_hotkey_dialog(obj)
-            return True
-        return super().eventFilter(obj, event)
-
-    def _open_hotkey_dialog(self, field: QLineEdit) -> None:
-        dlg = _HotkeyDialog(current=field.text(), parent=self)
-        if dlg.exec() == QDialog.Accepted:
-            field.setText(dlg.get_result())
-            self._update_reset_btn()
+    def _clear_hotkey(self, edit: QLineEdit) -> None:
+        edit.setText("")
+        self._update_reset_btn()
 
     def _create_appearance_page(self) -> QWidget:
         page, layout = self._base_page()
-        title, subtitle = self._make_header("Apariencia", "Color del área de selección y fuente del texto traducido.")
+        title, subtitle = self._make_header(
+            QCoreApplication.translate('Preferences', 'Appearance'),
+            QCoreApplication.translate('Preferences', 'Color of the selection area and font of the translated text.')
+        )
         form = self._make_form()
 
         self._btn_color = QPushButton()
         self._btn_color.setStyleSheet(_STYLE_BTN_COLOR)
         self._btn_color.setFixedSize(80, 28)
         self._btn_color.setCursor(Qt.PointingHandCursor)
-        self._btn_color.setToolTip("")
         self._btn_color.clicked.connect(self._pick_color)
         self._update_color_btn(self._selection_color)
 
         color_row = QHBoxLayout()
         color_row.setSpacing(8)
         color_row.addWidget(self._btn_color)
-        color_row.addWidget(_lbl_small("color del borde al seleccionar"))
+        color_row.addWidget(_lbl_small(QCoreApplication.translate('Preferences', 'border color when selected')))
 
         self.font_combo = QFontComboBox()
         self.font_combo.setFixedWidth(220)
         self.font_combo.setEditable(False)
         self.font_combo.setCursor(Qt.PointingHandCursor)
         self.font_combo.setStyleSheet(_STYLE_FONTCOMBO)
-        self.font_combo.blockSignals(True)
-        self.font_combo.setCurrentIndex(0)
-        self.font_combo.blockSignals(False)
 
         font_row = QHBoxLayout()
         font_row.setSpacing(8)
@@ -777,14 +781,13 @@ class PreferencesWindow(QWidget):
         self.spin_border_width.setFixedWidth(82)
         self.spin_border_width.setValue(SELECTION_BORDER_WIDTH)
         self.spin_border_width.setFocusPolicy(Qt.NoFocus)
-        self.spin_border_width.valueChanged.connect(self._update_preview)
 
         color_row.addWidget(self.spin_border_width)
-        color_row.addWidget(_lbl_small("grosor del borde"))
+        color_row.addWidget(_lbl_small(QCoreApplication.translate('Preferences', 'border width')))
         color_row.addStretch(1)
 
-        form.addRow(_lbl("Color de selección:"), color_row)
-        form.addRow(_lbl("Fuente del resultado:"), font_row)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Selection color:')), color_row)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Result font:')), font_row)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -797,28 +800,28 @@ class PreferencesWindow(QWidget):
 
     def _build_preview(self) -> QWidget:
         container = QWidget()
-        container.setStyleSheet(
-            "QWidget#preview_container {"
-            "  background-color: #1e1e1e;"
-            "  border: 1px solid #444444;"
-            "  border-radius: 6px;"
-            "}"
-        )
         container.setObjectName("preview_container")
+        container.setStyleSheet("""
+            QWidget#preview_container {
+                background-color: #1e1e1e;
+                border: 1px solid #444444;
+                border-radius: 6px;
+            }
+        """)
         container.setFixedHeight(90)
 
         v = QVBoxLayout(container)
         v.setContentsMargins(12, 8, 12, 8)
         v.setSpacing(6)
 
-        lbl_title = QLabel("Vista previa")
+        lbl_title = QLabel(QCoreApplication.translate('Preferences', 'Preview'))
         lbl_title.setStyleSheet("color: #888888; font-size: 14px;")
 
         self._preview_frame = QFrame()
         self._preview_frame.setFrameShape(QFrame.Box)
         self._preview_frame.setFixedHeight(44)
 
-        self._preview_label = QLabel("Texto traducido de ejemplo — Translation Preview")
+        self._preview_label = QLabel(QCoreApplication.translate('Preferences', 'Translation Preview'))
         self._preview_label.setAlignment(Qt.AlignCenter)
 
         inner = QVBoxLayout(self._preview_frame)
@@ -828,31 +831,60 @@ class PreferencesWindow(QWidget):
         v.addWidget(lbl_title)
         v.addWidget(self._preview_frame)
 
-        self.font_combo.currentFontChanged.connect(self._update_preview)
         self._update_preview()
         return container
 
+    # ------------------------------------------------------
+    # Eventos y señales
+    # ------------------------------------------------------
+    def _connect_change_signals(self) -> None:
+        self._combo_source.currentIndexChanged.connect(self._update_reset_btn)
+        self._combo_target.currentIndexChanged.connect(self._update_reset_btn)
+        self.font_combo.currentFontChanged.connect(self._update_preview)
+        self.font_combo.currentFontChanged.connect(self._update_reset_btn)
+        self.spin_border_width.valueChanged.connect(self._update_preview)
+        self.spin_border_width.valueChanged.connect(self._update_reset_btn)
+        self._spin_restart_threshold.valueChanged.connect(self._update_reset_btn)
+        
+    def _on_restart_toggled(self, checked: bool) -> None:
+        self._spin_restart_threshold.setEnabled(checked)
+        self._update_reset_btn()
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.MouseButtonPress and obj in (
+            self.edit_hotkey_main, self.edit_hotkey_sec1, self.edit_hotkey_sec2
+        ):
+            self._open_hotkey_dialog(obj)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _open_hotkey_dialog(self, field: QLineEdit) -> None:
+        dlg = _HotkeyDialog(current=field.text(), parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            field.setText(dlg.get_result())
+            self._update_reset_btn()
+
+    # ------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------
     def _update_preview(self, *_) -> None:
         family = self.font_combo.currentFont().family()
-        size   = 14
-        color  = self._selection_color if self._selection_color != "rainbow" else "#00aaff"
-        width  = self.spin_border_width.value()
+        color = self._selection_color if self._selection_color != "rainbow" else "#00aaff"
+        width = self.spin_border_width.value()
 
         self._preview_frame.setStyleSheet(
             f"QFrame {{ border: {width}px solid {color}; border-radius: 4px; background-color: #2a2a2a; }}"
         )
         self._preview_label.setStyleSheet(
-            f"color: #ffffff; font-family: '{family}'; font-size: {size}pt; border: none;"
+            f"color: #ffffff; font-family: '{family}'; font-size: 14pt; border: none;"
         )
-# (Dependencias/Interacciones: Depende de los estilos, de 'config' para los defaults y de 'preferences' para los getters/setters. Se comunica con 'core.ocr_engine' para comprobar si un modelo ya está descargado al cambiar el idioma origen.)
 
-
-# ==========================================================
-# BLOQUE: Color Picker y Lógica Arcoíris
-# ==========================================================
+    # ------------------------------------------------------
+    # Color picker
+    # ------------------------------------------------------
     def _pick_color(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Color de selección")
+        dlg.setWindowTitle(QCoreApplication.translate('Preferences', 'Selection Color'))
         dlg.setStyleSheet("background-color: #2a2a2a; color: #ffffff;")
 
         layout = QVBoxLayout(dlg)
@@ -871,7 +903,7 @@ class PreferencesWindow(QWidget):
                     obj.setCursor(Qt.PointingHandCursor)
                 return False
 
-        _hover_filter = _HoverFilter(dlg)
+        hover_filter = _HoverFilter(dlg)
 
         for child in picker.findChildren(QAbstractButton):
             child.setCursor(Qt.PointingHandCursor)
@@ -883,27 +915,25 @@ class PreferencesWindow(QWidget):
 
         for child in picker.findChildren(QWidget):
             if not isinstance(child, QAbstractButton):
-                child.installEventFilter(_hover_filter)
+                child.installEventFilter(hover_filter)
 
         btn_rgb = QPushButton("RGB — +FPS")
         btn_rgb.setMinimumHeight(36)
         btn_rgb.setCursor(Qt.PointingHandCursor)
 
-        _rgb_active = [self._rainbow_active]
+        rgb_active = [self._rainbow_active]
 
-        def _apply_rgb_style():
+        def apply_rgb_style():
             btn_rgb.setStyleSheet(
-                PreferencesWindow._rainbow_btn_style_active() if _rgb_active[0]
-                else PreferencesWindow._rainbow_btn_style()
+                self._rainbow_btn_style_active() if rgb_active[0] else self._rainbow_btn_style()
             )
 
-        _apply_rgb_style()
+        def toggle_rgb():
+            rgb_active[0] = not rgb_active[0]
+            apply_rgb_style()
 
-        def _toggle_rgb():
-            _rgb_active[0] = not _rgb_active[0]
-            _apply_rgb_style()
-
-        btn_rgb.pressed.connect(_toggle_rgb)
+        apply_rgb_style()
+        btn_rgb.pressed.connect(toggle_rgb)
 
         picker_layout = picker.layout()
         inserted = False
@@ -916,24 +946,23 @@ class PreferencesWindow(QWidget):
                         picker_layout.insertWidget(i, btn_rgb)
                         inserted = True
                         break
+
+        layout.addWidget(picker)
         if not inserted:
-            layout.addWidget(picker)
             layout.addWidget(btn_rgb)
-        else:
-            layout.addWidget(picker)
 
-        _user_interacted = [False]
+        user_interacted = [False]
 
-        def _on_color_changed(_):
-            if _user_interacted[0]:
-                _rgb_active[0] = False
-                _apply_rgb_style()
+        def on_color_changed(_):
+            if user_interacted[0]:
+                rgb_active[0] = False
+                apply_rgb_style()
 
-        picker.currentColorChanged.connect(_on_color_changed)
-        QTimer.singleShot(50, lambda: _user_interacted.__setitem__(0, True))
+        picker.currentColorChanged.connect(on_color_changed)
+        QTimer.singleShot(50, lambda: user_interacted.__setitem__(0, True))
 
-        btn_ok     = QPushButton("Aceptar")
-        btn_cancel = QPushButton("Cancelar")
+        btn_ok = QPushButton(QCoreApplication.translate('Preferences', 'Accept'))
+        btn_cancel = QPushButton(QCoreApplication.translate('Preferences', 'Cancel'))
         btn_ok.setStyleSheet(_STYLE_BTN_SAVE)
         btn_cancel.setStyleSheet(_STYLE_BTN_CANCEL)
         btn_ok.setCursor(Qt.PointingHandCursor)
@@ -945,11 +974,12 @@ class PreferencesWindow(QWidget):
         btn_row.addWidget(btn_ok)
         layout.addLayout(btn_row)
 
-        def _on_ok():
-            if _rgb_active[0]:
-                self._rainbow_active  = True
+        def on_ok():
+            if rgb_active[0]:
+                self._rainbow_active = True
                 self._selection_color = "rainbow"
                 self._rainbow_timer.start()
+                self._update_color_btn("rainbow")
             else:
                 self._rainbow_active = False
                 self._rainbow_timer.stop()
@@ -958,11 +988,12 @@ class PreferencesWindow(QWidget):
                 if color.isValid():
                     self._selection_color = color.name()
                 self._update_color_btn(self._selection_color)
+
             self._update_reset_btn()
-            QTimer.singleShot(0, self._update_preview)
+            self._update_preview()
             dlg.accept()
 
-        btn_ok.clicked.connect(_on_ok)
+        btn_ok.clicked.connect(on_ok)
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec()
 
@@ -987,18 +1018,16 @@ class PreferencesWindow(QWidget):
                 f"border-radius: 4px; min-width: 64px; min-height: 26px; }}"
                 f"QPushButton:hover {{ border-color: #0078d4; }}"
             )
-        self._btn_color.setToolTip("")
 
     def _tick_rainbow(self) -> None:
         self._rainbow_hue = (self._rainbow_hue + 3) % 360
         color = QColor.fromHsv(self._rainbow_hue, 255, 255)
-        self._selection_color = "rainbow"
-        self._update_color_btn(color.name())
         if hasattr(self, "_preview_frame"):
             width = self.spin_border_width.value()
             self._preview_frame.setStyleSheet(
                 f"QFrame {{ border: {width}px solid {color.name()}; border-radius: 4px; background-color: #2a2a2a; }}"
             )
+        self._update_color_btn(color.name())
 
     @staticmethod
     def _rainbow_btn_style() -> str:
@@ -1017,7 +1046,7 @@ class PreferencesWindow(QWidget):
             "QPushButton:checked { border: 2px solid #ffffff; }"
             "QPushButton:hover   { border: 2px solid #cccccc; }"
         )
-        
+
     @staticmethod
     def _rainbow_btn_style_active() -> str:
         return (
@@ -1035,45 +1064,34 @@ class PreferencesWindow(QWidget):
             "}"
             "QPushButton:hover { border: 2px solid #cccccc; }"
         )
-# (Dependencias/Interacciones: Maneja la ventana emergente de selección de color. Se conecta con la UI de Apariencia para actualizar la vista previa dinámicamente.)
 
-
-# ==========================================================
-# BLOQUE: Carga, Guardado y Comunicación de Estado
-# ==========================================================
+    # ------------------------------------------------------
+    # Estado
+    # ------------------------------------------------------
     def _load_values(self) -> None:
-        # Traducción
-        source_code = get_translation_source()
-        idx = self._combo_source.findData(source_code)
-        self._combo_source.blockSignals(True)
-        self._combo_source.setCurrentIndex(idx if idx >= 0 else 0)
-        self._prev_source_index = self._combo_source.currentIndex()
-        self._combo_source.blockSignals(False)
+        self._set_combo_data(self._combo_source, get_translation_source())
+        self._set_combo_data(self._combo_target, get_translation_target())
 
-        target_code = get_translation_target()
-        idx = self._combo_target.findData(target_code)
-        self._combo_target.blockSignals(True)
-        self._combo_target.setCurrentIndex(idx if idx >= 0 else 0)
-        self._combo_target.blockSignals(False)
+        self._chk_restart.blockSignals(True)
+        self._chk_restart.setChecked(get_ocr_restart_enabled())
+        self._chk_restart.blockSignals(False)
+        self._spin_restart_threshold.setValue(get_ocr_restart_char_threshold())
+        self._on_restart_toggled(self._chk_restart.isChecked())
 
-        self._chk_cache.setChecked(get_translation_cache_enabled())
-
-        # Captura
         hotkeys = get_capture_hotkeys()
-        self.edit_hotkey_main.setText(hotkeys[0] if len(hotkeys) > 0 else CAPTURE_HOTKEYS[0])
+        self.edit_hotkey_main.setText(hotkeys[0] if hotkeys else CAPTURE_HOTKEYS[0])
         self.edit_hotkey_sec1.setText(get_capture_secondary_1())
         self.edit_hotkey_sec2.setText(get_capture_secondary_2())
 
-        # Apariencia
         self._selection_color = get_selection_color()
 
-        _family = get_result_font_family()
+        family = get_result_font_family()
         self.font_combo.blockSignals(True)
-        _idx = self.font_combo.findText(_family, Qt.MatchFixedString)
-        if _idx >= 0:
-            self.font_combo.setCurrentIndex(_idx)
+        idx = self.font_combo.findText(family, Qt.MatchFixedString)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
         else:
-            self.font_combo.setCurrentFont(QFont(_family))
+            self.font_combo.setCurrentFont(QFont(family))
         self.font_combo.blockSignals(False)
 
         self.spin_border_width.setValue(get_selection_border_width())
@@ -1087,20 +1105,15 @@ class PreferencesWindow(QWidget):
             self._rainbow_timer.stop()
             self._update_color_btn(self._selection_color)
 
-        # Conectar cambios al checker DESPUÉS de cargar valores
-        self._combo_source.currentIndexChanged.connect(self._update_reset_btn)
-        self._combo_target.currentIndexChanged.connect(self._update_reset_btn)
-        self._chk_cache.stateChanged.connect(self._update_reset_btn)
-        self.font_combo.currentFontChanged.connect(self._update_reset_btn)
-        self.spin_border_width.valueChanged.connect(self._update_reset_btn)
-
         self._update_preview()
         self._update_reset_btn()
 
     def _on_save(self) -> None:
         set_translation_source(self._combo_source.currentData() or TRANSLATION_SOURCE)
         set_translation_target(self._combo_target.currentData() or TRANSLATION_TARGET)
-        set_translation_cache_enabled(self._chk_cache.isChecked())
+
+        set_ocr_restart_enabled(self._chk_restart.isChecked())
+        set_ocr_restart_char_threshold(self._spin_restart_threshold.value())
 
         main_hk = self.edit_hotkey_main.text().strip() or CAPTURE_HOTKEYS[0]
         set_capture_hotkeys([main_hk])
@@ -1111,20 +1124,17 @@ class PreferencesWindow(QWidget):
         set_result_font_family(self.font_combo.currentFont().family())
         set_selection_border_width(self.spin_border_width.value())
 
-        print("[PREF] Preferencias guardadas correctamente.")
         self._do_close()
 
     def _on_reset(self) -> None:
-        idx = self._combo_source.findData(TRANSLATION_SOURCE)
-        self._combo_source.blockSignals(True)
-        self._combo_source.setCurrentIndex(idx if idx >= 0 else 0)
-        self._prev_source_index = self._combo_source.currentIndex()
-        self._combo_source.blockSignals(False)
+        self._set_combo_data(self._combo_source, TRANSLATION_SOURCE)
+        self._set_combo_data(self._combo_target, TRANSLATION_TARGET)
 
-        idx = self._combo_target.findData(TRANSLATION_TARGET)
-        self._combo_target.blockSignals(True)
-        self._combo_target.setCurrentIndex(idx if idx >= 0 else 0)
-        self._combo_target.blockSignals(False)
+        self._chk_restart.blockSignals(True)
+        self._chk_restart.setChecked(OCR_RESTART_ENABLED)
+        self._chk_restart.blockSignals(False)
+        self._spin_restart_threshold.setValue(OCR_RESTART_CHAR_THRESHOLD)
+        self._on_restart_toggled(self._chk_restart.isChecked())
 
         self.edit_hotkey_main.setText(CAPTURE_HOTKEYS[0])
         self.edit_hotkey_sec1.setText(CAPTURE_SECONDARY_1)
@@ -1132,67 +1142,46 @@ class PreferencesWindow(QWidget):
 
         self._rainbow_timer.stop()
         self._rainbow_active = False
+        self._rainbow_hue = 0
         self._selection_color = SELECTION_COLOR
         self._update_color_btn(self._selection_color)
 
+        self.font_combo.blockSignals(True)
         self.font_combo.setCurrentFont(QFont(RESULT_FONT_FAMILY))
+        self.font_combo.blockSignals(False)
+
         self.spin_border_width.setValue(SELECTION_BORDER_WIDTH)
-        self._update_reset_btn()
+
         self._update_preview()
-        print("[PREF] Valores restablecidos a defaults (no guardado aún).")
+        self._update_reset_btn()
 
     def _update_reset_btn(self, *_) -> None:
-        changed = any([
+        changed = any((
             self._combo_source.currentData() != TRANSLATION_SOURCE,
             self._combo_target.currentData() != TRANSLATION_TARGET,
-            self._chk_cache.isChecked()             != TRANSLATION_CACHE_ENABLED,
-            self.edit_hotkey_main.text().strip()   != CAPTURE_HOTKEYS[0],
-            self.edit_hotkey_sec1.text().strip()   != CAPTURE_SECONDARY_1,
-            self.edit_hotkey_sec2.text().strip()   != CAPTURE_SECONDARY_2,
-            self._selection_color.lower()          != SELECTION_COLOR.lower(),
+            self._chk_restart.isChecked() != OCR_RESTART_ENABLED,
+            self._spin_restart_threshold.value() != OCR_RESTART_CHAR_THRESHOLD,
+            self.edit_hotkey_main.text().strip() != CAPTURE_HOTKEYS[0],
+            self.edit_hotkey_sec1.text().strip() != CAPTURE_SECONDARY_1,
+            self.edit_hotkey_sec2.text().strip() != CAPTURE_SECONDARY_2,
+            self._selection_color.lower() != SELECTION_COLOR.lower(),
             self.font_combo.currentFont().family() != RESULT_FONT_FAMILY,
-            self.spin_border_width.value()         != SELECTION_BORDER_WIDTH,
-        ])
+            self.spin_border_width.value() != SELECTION_BORDER_WIDTH,
+        ))
         self.btn_reset.setEnabled(changed)
 
-    def on_model_download_finished(self, lang_code: str) -> None:
-        if lang_code != self._pending_download_code:
-            return
-        self._combo_source.blockSignals(True)
-        self._combo_source.setCurrentIndex(self._pending_download_index)
-        self._prev_source_index = self._pending_download_index
-        self._combo_source.blockSignals(False)
-        self._pending_download_code  = None
-        self._pending_download_index = None
-        self._update_reset_btn()
-
-    def on_model_download_failed(self, lang_code: str) -> None:
-        self._pending_download_code  = None
-        self._pending_download_index = None
-        QMessageBox.warning(
-            self, "Error de descarga",
-            f"No se pudo descargar el modelo para '{lang_code}'.\nVerifica tu conexión e inténtalo de nuevo.",
-        )
+    # ------------------------------------------------------
+    # Cierre
+    # ------------------------------------------------------
+    def _stop_runtime_resources(self) -> None:
+        if self._rainbow_timer.isActive():
+            self._rainbow_timer.stop()
 
     def _do_close(self) -> None:
-        self.hide()
-        self._sig.closed.emit()
+        self._stop_runtime_resources()
+        self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        event.ignore()
-        QTimer.singleShot(0, self._do_close)
-
-
-# ==========================================================
-# BLOQUE: Helpers de Etiquetas
-# ==========================================================
-def _lbl(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(_STYLE_LABEL)
-    return lbl
-
-def _lbl_small(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(_STYLE_SUBLABEL)
-    return lbl
-# (Dependencias/Interacciones: Depende fuertemente de 'preferences' y 'config'. Se comunica con 'main.py' mediante la señal 'download_model_requested' y 'closed' para avisar que debe recargar hotkeys.)
+        self._stop_runtime_resources()
+        event.accept()
+        super().closeEvent(event)
