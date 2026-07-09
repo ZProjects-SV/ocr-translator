@@ -3,21 +3,21 @@
 #
 # This file is part of OCR Translator.
 # OCR Translator is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
+# it under the terms of the GNU Affero General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
 # OCR Translator is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
+# GNU Affero General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License
+# You should have received a copy of the GNU Affero General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 
 import gc
 from PySide6.QtWidgets import QWidget, QApplication, QLabel
-from PySide6.QtCore import Qt, QRect, QEventLoop, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QRect, QEventLoop, QPropertyAnimation, QEasingCurve, QCoreApplication
 from PySide6.QtGui import QPainter, QColor, QPen, QCursor, QPixmap, QPixmapCache
 from PIL import Image
 
@@ -334,7 +334,7 @@ class _SelectionWindow(QWidget):
 
         if (x2 - x1) < SELECTION_MIN_WIDTH or (y2 - y1) < SELECTION_MIN_HEIGHT:
             print("[WARN] Seleccion muy pequena")
-            self._show_toast("El area es muy pequena", self.end_point)
+            self._show_toast(QCoreApplication.translate('Selection', 'Area too small'), self.end_point)
             self.start_point = None
             self.end_point = None
             self.update()

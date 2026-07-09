@@ -1,10 +1,26 @@
+# OCR Translator
+# Copyright (C) 2026 ZProjects
+#
+# This file is part of OCR Translator.
+# OCR Translator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# OCR Translator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 import os
 import sys
 import threading
 
 from PySide6.QtWidgets import QWidget, QApplication, QPushButton
-from PySide6.QtCore import Qt, QPoint, Signal, QObject, QRect, QTimer
+from PySide6.QtCore import Qt, QPoint, Signal, QObject, QRect, QTimer, QCoreApplication
 from PySide6.QtGui import QPainter, QColor, QLinearGradient, QFont, QPen, QBrush, QPixmap
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,12 +54,12 @@ class SplashScreen(QWidget):
         self._closed = False
         self._is_error = False
         self._progress = 0.0
-        self._status = "Iniciando..."
-        self._title = "OCR Translator"
-        self._subtitle = "Captura  .  Reconoce  .  Traduce"
+        self._status = QCoreApplication.translate('Splash', 'Initializing...')
+        self._title = self._title = "OCR Translator"
+        self._subtitle = QCoreApplication.translate('Splash', 'Capture  .  Recognize  .  Translate')
         self._drag_pos = QPoint()
 
-        self._download_anim_base_text = "Descargando modelos"
+        self._download_anim_base_text = QCoreApplication.translate('Splash', 'Downloading models')
         self._download_anim_enabled = False
         self._download_anim_dots = 0
 
@@ -74,7 +90,7 @@ class SplashScreen(QWidget):
         self._dot_timer.setInterval(500)
         self._dot_timer.timeout.connect(self._advance_download_dots)
 
-        self._btn_accept = QPushButton("Aceptar", self)
+        self._btn_accept = QPushButton(QCoreApplication.translate('Splash', 'Accept'), self)
         self._btn_accept.setFixedSize(120, 34)
         self._btn_accept.setCursor(Qt.PointingHandCursor)
         self._btn_accept.setStyleSheet("""
@@ -134,11 +150,11 @@ class SplashScreen(QWidget):
     def _do_show_error(self, message: str):
         self._is_error = True
         self._set_download_animation(False)
-        self._title = "Error"
-        self._subtitle = "No se pudo iniciar la aplicación"
+        self._title = QCoreApplication.translate('Splash', 'Error')
+        self._subtitle = QCoreApplication.translate('Splash', 'Could not initialize the application')
         self._status = message
         self._progress = 1.0
-        self._btn_accept.setText("Cerrar")
+        self._btn_accept.setText(QCoreApplication.translate('Splash', 'Close'))
         self._btn_accept.show()
         self._btn_accept.raise_()
         self.update()
@@ -150,7 +166,7 @@ class SplashScreen(QWidget):
             except Exception as e:
                 print(f"[ERROR] Splash-Worker: {e}")
                 self.set_download_animation_enabled(False)
-                self.set_status(f"Error: {e}", 1.0)
+                self.set_status(QCoreApplication.translate('Splash', 'Error') + " - " + str(e), 1.0)
                 self.show_completion_button()
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -161,8 +177,8 @@ class SplashScreen(QWidget):
         self.update()
 
     def _do_set_download(self):
-        self._title = "Descargando modelos OCR"
-        self._subtitle = "Primera ejecución  -  Esto solo ocurre una vez"
+        self._title = QCoreApplication.translate('Splash', 'Downloading OCR models')
+        self._subtitle = QCoreApplication.translate('Splash', 'First execution  -  This only happens once')
         self.update()
 
     def _set_download_animation(self, enabled: bool):
@@ -180,7 +196,7 @@ class SplashScreen(QWidget):
             self._dot_timer.stop()
             return
 
-        if self._status.startswith("Descargando"):
+        if self._status.startswith(QCoreApplication.translate('Splash', 'Downloading')):
             self._download_anim_dots = (self._download_anim_dots % 3) + 1
             animated = self._download_anim_base_text + ("." * self._download_anim_dots)
             self._status = animated

@@ -1,10 +1,26 @@
+# OCR Translator
+# Copyright (C) 2026 ZProjects
+#
+# This file is part of OCR Translator.
+# OCR Translator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# OCR Translator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel,
     QProgressBar, QApplication, QHBoxLayout, QPushButton, QStyle
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRect, QPointF
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRectF, QPointF, QCoreApplication
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage, QFontMetrics
 from PIL import Image, ImageFilter
 import numpy as np
@@ -19,11 +35,6 @@ from preferences import get_result_font_family
 # Widget de imagen con zoom y drag
 # ==========================================================
 class ZoomableImageLabel(QWidget):
-
-    _SHADOW_OFFSETS = [
-        (1, 0), (-1, 0), (0, 1), (0, -1),
-        (1, 1), (-1, 1), (1, -1), (-1, -1)
-    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,30 +81,12 @@ class ZoomableImageLabel(QWidget):
             painter.drawPixmap(0, 0, self._pixmap)
 
             if self._text_overlays:
-                draw_shadow = self._zoom < 2.0
                 for ov in self._text_overlays:
                     font = QF(ov['font_family'], ov['font_size'])
                     painter.setFont(font)
-                    rect = QRect(ov['x'], ov['y'], ov['w'], ov['h'])
-                    text = ov['text']
-
-                    if draw_shadow:
-                        _, _, v, _ = ov['color'].getHsv()
-                        if v < 128:
-                            outline_color = QColor(255, 255, 255, 220)
-                        else:
-                            outline_color = QColor(0, 0, 0, 220)
-                        painter.setPen(QPen(outline_color))
-                        for dx, dy in self._SHADOW_OFFSETS:
-                            painter.drawText(
-                                QRect(rect.x() + dx, rect.y() + dy,
-                                      rect.width(), rect.height()),
-                                Qt.AlignVCenter | Qt.AlignLeft, text
-                            )
-
+                    rect = QRectF(ov['x'], ov['y'], ov['w'], ov['h'])
                     painter.setPen(QPen(ov['color']))
-                    painter.drawText(rect,
-                                     Qt.AlignVCenter | Qt.AlignLeft, text)
+                    painter.drawText(rect, Qt.AlignVCenter | Qt.AlignLeft, ov['text'])
         painter.end()
 
 
@@ -403,6 +396,20 @@ class UnifiedResultWindow:
             s = min(255, int(s * 1.5) + 30)
             v = min(255, int(v * 1.2) + 25)
         color.setHsv(h, s, v, a)
+        # --- Boost de saturación y brillo en HSV ---
+        color = QColor(int(avg[0]), int(avg[1]), int(avg[2]))
+        h, s, v, a = color.getHsv()
+        if s < 40:
+            if median_brightness < 128:
+                v = min(255, int(v * 1.4) + 80)
+                s = min(255, int(s * 2.0) + 30)
+            else:
+                v = max(0, int(v * 0.7) - 30)
+                s = min(255, int(s * 2.0) + 30)
+        else:
+            s = min(255, int(s * 1.5) + 30)
+            v = min(255, int(v * 1.2) + 25)
+        color.setHsv(h, s, v, a)
         del avg
         return color
 
@@ -477,14 +484,18 @@ class UnifiedResultWindow:
             text = translated_lines[line_idx]
             line_idx += 1
 
-            font_size = max(8, int(box_h * 0.8))
+            min_font_size = 7
+            font_size = max(min_font_size, int(box_h * 0.8))
             font_family = get_result_font_family()
             font = QF(font_family, font_size)
             fm = QFontMetrics(font)
-            while font_size > 6 and fm.horizontalAdvance(text) > box_w - 4:
+            while font_size > min_font_size and fm.horizontalAdvance(text) > box_w - 4:
                 font_size -= 1
                 font = QF(font_family, font_size)
                 fm = QFontMetrics(font)
+
+            if fm.horizontalAdvance(text) > box_w - 4:
+                text = fm.elidedText(text, Qt.ElideRight, box_w - 4)
 
             overlays.append({
                 'text': text,
@@ -524,7 +535,7 @@ class UnifiedResultWindow:
             if self._zoom_label:
                 self._zoom_label.setSourcePixmap(self._pixmap_before)
             if self._toggle_btn:
-                self._toggle_btn.setText("Ver traducción")
+                self._toggle_btn.setText(QCoreApplication.translate('Loading', 'View translation'))
 
 
     # ==========================================================
@@ -546,7 +557,7 @@ class UnifiedResultWindow:
         dot.setFixedWidth(16)
         row_layout.addWidget(dot)
 
-        self._status_label = QLabel("Extrayendo texto...")
+        self._status_label = QLabel(QCoreApplication.translate('Loading', 'Extracting text...'))
         self._status_label.setFont(QFont("Segoe UI", 11, QFont.Medium))
         self._status_label.setStyleSheet("color: #ffffff;")
         row_layout.addWidget(self._status_label)
@@ -562,7 +573,7 @@ class UnifiedResultWindow:
         """)
         self._layout.addWidget(self._progress)
 
-        hint = QLabel("Esto puede tardar unos segundos")
+        hint = QLabel(QCoreApplication.translate('Loading', 'This may take a few seconds'))
         hint.setFont(QFont("Segoe UI", 8))
         hint.setStyleSheet("color: #b0b0b0;")
         hint.setAlignment(Qt.AlignLeft)
@@ -647,30 +658,30 @@ class UnifiedResultWindow:
         btn_bar.setSpacing(8)
 
         if image and blocks:
-            self._toggle_btn = QPushButton("Ver original")
-            self._toggle_btn.setToolTip("Muestra la captura sin traducción")
+            self._toggle_btn = QPushButton(QCoreApplication.translate('Loading', 'View original'))
+            self._toggle_btn.setToolTip(QCoreApplication.translate('Loading', 'Shows the original capture without translation'))
             self._toggle_btn.setFont(QFont("Segoe UI", 9))
             self._toggle_btn.setFixedHeight(32)
             self._toggle_btn.setStyleSheet(btn_style_secondary)
             self._toggle_btn.clicked.connect(self._toggle_view)
             btn_bar.addWidget(self._toggle_btn)
 
-            self._reset_btn = QPushButton("Reset zoom")
+            self._reset_btn = QPushButton(QCoreApplication.translate('Loading', 'Reset zoom'))
             self._reset_btn.setFont(QFont("Segoe UI", 9))
             self._reset_btn.setFixedHeight(32)
-            self._reset_btn.setToolTip("Restaura el zoom y posición originales")
+            self._reset_btn.setToolTip(QCoreApplication.translate('Loading', 'Restores the original zoom and position'))
             self._reset_btn.setStyleSheet(btn_style_secondary)
             self._reset_btn.clicked.connect(self._on_reset_zoom)
             btn_bar.addWidget(self._reset_btn)
 
-            hint = QLabel("Scroll: zoom  •  Arrastrar: mover")
+            hint = QLabel(QCoreApplication.translate('Loading', 'Scroll: zoom  •  Drag: move'))
             hint.setFont(QFont("Segoe UI", 8))
             hint.setStyleSheet("color: #888888;")
             btn_bar.addWidget(hint)
 
         btn_bar.addStretch()
 
-        self._close_btn = QPushButton("Cerrar")
+        self._close_btn = QPushButton(QCoreApplication.translate('Loading', 'Close'))
         self._close_btn.setFont(QFont("Segoe UI", 9))
         self._close_btn.setFixedHeight(32)
         self._close_btn.setStyleSheet(btn_style_primary)

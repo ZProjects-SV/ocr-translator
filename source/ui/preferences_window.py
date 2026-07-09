@@ -1,3 +1,19 @@
+# OCR Translator
+# Copyright (C) 2026 ZProjects
+#
+# This file is part of OCR Translator.
+# OCR Translator is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# OCR Translator is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
@@ -6,7 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton, QColorDialog, QFontComboBox, QFrame, QDialog,
     QAbstractButton, QComboBox, QCheckBox,
 )
-from PySide6.QtCore import Qt, Signal, QObject, QTimer, QEvent
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QEvent, QCoreApplication
 from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeySequence
 
 from preferences import (
@@ -309,7 +325,7 @@ class _HotkeyDialog(QDialog):
 
     def __init__(self, current: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Asignar atajo")
+        self.setWindowTitle(QCoreApplication.translate('Preferences', 'Assign shortcut'))
         self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         self.setFixedSize(360, 220)
         self.setStyleSheet("background-color: #2a2a2a; color: #ffffff;")
@@ -334,7 +350,7 @@ class _HotkeyDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 14)
         layout.setSpacing(12)
 
-        lbl_mods = QLabel("Modificadores:")
+        lbl_mods = QLabel(QCoreApplication.translate('Preferences', 'Modifiers:'))
         lbl_mods.setStyleSheet(_STYLE_SUBLABEL)
 
         self._chk_ctrl = self._make_mod_btn("Ctrl", self._init_ctrl)
@@ -348,7 +364,7 @@ class _HotkeyDialog(QDialog):
         mod_row.addWidget(self._chk_alt)
         mod_row.addStretch(1)
 
-        lbl_key = QLabel("Tecla base (haz clic en el campo y presiona una tecla):")
+        lbl_key = QLabel(QCoreApplication.translate('Preferences', 'Base key (click the field and press a key):'))
         lbl_key.setStyleSheet(_STYLE_SUBLABEL)
         lbl_key.setWordWrap(True)
 
@@ -356,7 +372,7 @@ class _HotkeyDialog(QDialog):
         self._edit.setText(self._base_key)
         self._edit.setReadOnly(True)
         self._edit.setAlignment(Qt.AlignCenter)
-        self._edit.setPlaceholderText("Haz clic aqui para capturar...")
+        self._edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Click here to capture...'))
         self._edit.setCursor(Qt.PointingHandCursor)
         self._edit.setStyleSheet("""
             QLineEdit {
@@ -373,12 +389,12 @@ class _HotkeyDialog(QDialog):
         self._edit.setFocusPolicy(Qt.NoFocus)
         self._edit.installEventFilter(self)
 
-        lbl_sub = QLabel("Los clics del mouse no se registran como atajo.")
+        lbl_sub = QLabel(QCoreApplication.translate('Preferences', 'Mouse clicks are not registered as shortcuts.'))
         lbl_sub.setStyleSheet("color: #555555; font-size: 10px;")
         lbl_sub.setAlignment(Qt.AlignCenter)
 
-        btn_ok = QPushButton("Aceptar")
-        btn_cancel = QPushButton("Cancelar")
+        btn_ok = QPushButton(QCoreApplication.translate('Preferences', 'Accept'))
+        btn_cancel = QPushButton(QCoreApplication.translate('Preferences', 'Cancel'))
         btn_ok.setStyleSheet(_STYLE_BTN_SAVE)
         btn_cancel.setStyleSheet(_STYLE_BTN_CANCEL)
         btn_ok.setCursor(Qt.PointingHandCursor)
@@ -435,10 +451,10 @@ class _HotkeyDialog(QDialog):
         self._edit.style().unpolish(self._edit)
         self._edit.style().polish(self._edit)
         if waiting:
-            self._edit.setPlaceholderText("Presiona una tecla...")
+            self._edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Press a key...'))
             self._edit.setText("")
         else:
-            self._edit.setPlaceholderText("Haz clic aqui para capturar...")
+            self._edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Click here to capture...'))
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
@@ -490,7 +506,7 @@ class PreferencesWindow(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"{APP_NAME} – Preferencias")
+        self.setWindowTitle(f"{APP_NAME} – {QCoreApplication.translate('Preferences', 'Preferences')}")
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setAttribute(Qt.WA_QuitOnClose, False)
         self.setWindowFlags(Qt.Window)
@@ -526,9 +542,9 @@ class PreferencesWindow(QWidget):
         self.pages.addWidget(self._create_capture_page())
         self.pages.addWidget(self._create_appearance_page())
 
-        self._add_section("Traducción", 0)
-        self._add_section("Captura", 1)
-        self._add_section("Apariencia", 2)
+        self._add_section(QCoreApplication.translate('Preferences', 'Translation'), 0)
+        self._add_section(QCoreApplication.translate('Preferences', 'Capture'), 1)
+        self._add_section(QCoreApplication.translate('Preferences', 'Appearance'), 2)
 
         self.sections.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sections.setCurrentRow(0)
@@ -538,14 +554,14 @@ class PreferencesWindow(QWidget):
         sep.setFixedHeight(1)
         sep.setStyleSheet(_STYLE_SEPARATOR)
 
-        btn_save = QPushButton("Guardar")
-        btn_cancel = QPushButton("Cancelar")
+        btn_save = QPushButton(QCoreApplication.translate('Preferences', 'Save'))
+        btn_cancel = QPushButton(QCoreApplication.translate('Preferences', 'Cancel'))
         btn_save.setStyleSheet(_STYLE_BTN_SAVE)
         btn_cancel.setStyleSheet(_STYLE_BTN_CANCEL)
         btn_save.clicked.connect(self._on_save)
         btn_cancel.clicked.connect(self._do_close)
 
-        self.btn_reset = QPushButton("Restablecer")
+        self.btn_reset = QPushButton(QCoreApplication.translate('Preferences', 'Reset'))
         self.btn_reset.setStyleSheet(_STYLE_BTN_RESET)
         self.btn_reset.clicked.connect(self._on_reset)
         self.btn_reset.setEnabled(False)
@@ -621,18 +637,18 @@ class PreferencesWindow(QWidget):
     def _create_translation_page(self) -> QWidget:
         page, layout = self._base_page()
         title, subtitle = self._make_header(
-            "Traducción",
-            "Configura los idiomas y el comportamiento del traductor."
+            QCoreApplication.translate('Preferences', 'Translation'),
+            QCoreApplication.translate('Preferences', 'Configure the languages and behavior of the translator.')
         )
         form = self._make_form()
 
         self._combo_source = self._make_lang_combo()
         self._combo_target = self._make_lang_combo()
 
-        form.addRow(_lbl("Idioma origen"), self._combo_source)
-        form.addRow(_lbl("Idioma destino"), self._combo_target)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Source language')), self._combo_source)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Target language')), self._combo_target)
 
-        self._chk_restart = QCheckBox("Reiniciar motor OCR tras extracción grande")
+        self._chk_restart = QCheckBox(QCoreApplication.translate('Preferences', 'Restart OCR engine after large extraction'))
         self._chk_restart.setStyleSheet("""
             QCheckBox { color: #ffffff; spacing: 8px; }
             QCheckBox::indicator {
@@ -667,8 +683,8 @@ class PreferencesWindow(QWidget):
     def _create_capture_page(self) -> QWidget:
         page, layout = self._base_page()
         title, subtitle = self._make_header(
-            "Captura",
-            "Atajos de teclado para iniciar la captura y traducción."
+            QCoreApplication.translate('Preferences', 'Capture'),
+            QCoreApplication.translate('Preferences', 'Keyboard shortcuts to start capture and translation.')
         )
         form = self._make_form()
 
@@ -676,13 +692,13 @@ class PreferencesWindow(QWidget):
         self.edit_hotkey_sec1 = self._make_hotkey_field()
         self.edit_hotkey_sec2 = self._make_hotkey_field()
 
-        form.addRow(_lbl("Atajo de captura:"), self._hotkey_row(self.edit_hotkey_main))
-        form.addRow(_lbl("Atajo adicional 1:"), self._hotkey_row(self.edit_hotkey_sec1, clearable=True))
-        form.addRow(_lbl("Atajo adicional 2:"), self._hotkey_row(self.edit_hotkey_sec2, clearable=True))
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Capture shortcut')), self._hotkey_row(self.edit_hotkey_main))
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Additional shortcut 1')), self._hotkey_row(self.edit_hotkey_sec1, clearable=True))
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Additional shortcut 2')), self._hotkey_row(self.edit_hotkey_sec2, clearable=True))
 
         hint = QLabel(
-            "Haz clic en el campo para asignar una tecla o combinación. "
-            "Los clics del mouse no se aceptan como atajo."
+            QCoreApplication.translate('Preferences', 'Click on the field to assign a key or combination. '
+                                                      'Mouse clicks are not accepted as shortcuts.')
         )
         hint.setStyleSheet(_STYLE_SUBLABEL)
         hint.setWordWrap(True)
@@ -699,7 +715,7 @@ class PreferencesWindow(QWidget):
         edit = QLineEdit()
         edit.setReadOnly(True)
         edit.setFixedWidth(200)
-        edit.setPlaceholderText("Sin asignar")
+        edit.setPlaceholderText(QCoreApplication.translate('Preferences', 'Not assigned'))
         edit.setCursor(Qt.PointingHandCursor)
         edit.setAlignment(Qt.AlignCenter)
         edit.setStyleSheet(_STYLE_HOTKEY_EDIT)
@@ -717,7 +733,7 @@ class PreferencesWindow(QWidget):
             btn_clear = QPushButton("✕")
             btn_clear.setFixedSize(24, 24)
             btn_clear.setCursor(Qt.PointingHandCursor)
-            btn_clear.setToolTip("Limpiar atajo")
+            btn_clear.setToolTip(QCoreApplication.translate('Preferences', 'Clear shortcut'))
             btn_clear.setStyleSheet(_STYLE_HOTKEY_CLEAR)
             btn_clear.clicked.connect(lambda: self._clear_hotkey(edit))
             row.addWidget(btn_clear)
@@ -732,8 +748,8 @@ class PreferencesWindow(QWidget):
     def _create_appearance_page(self) -> QWidget:
         page, layout = self._base_page()
         title, subtitle = self._make_header(
-            "Apariencia",
-            "Color del área de selección y fuente del texto traducido."
+            QCoreApplication.translate('Preferences', 'Appearance'),
+            QCoreApplication.translate('Preferences', 'Color of the selection area and font of the translated text.')
         )
         form = self._make_form()
 
@@ -747,7 +763,7 @@ class PreferencesWindow(QWidget):
         color_row = QHBoxLayout()
         color_row.setSpacing(8)
         color_row.addWidget(self._btn_color)
-        color_row.addWidget(_lbl_small("color del borde al seleccionar"))
+        color_row.addWidget(_lbl_small(QCoreApplication.translate('Preferences', 'border color when selected')))
 
         self.font_combo = QFontComboBox()
         self.font_combo.setFixedWidth(220)
@@ -767,11 +783,11 @@ class PreferencesWindow(QWidget):
         self.spin_border_width.setFocusPolicy(Qt.NoFocus)
 
         color_row.addWidget(self.spin_border_width)
-        color_row.addWidget(_lbl_small("grosor del borde"))
+        color_row.addWidget(_lbl_small(QCoreApplication.translate('Preferences', 'border width')))
         color_row.addStretch(1)
 
-        form.addRow(_lbl("Color de selección:"), color_row)
-        form.addRow(_lbl("Fuente del resultado:"), font_row)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Selection color:')), color_row)
+        form.addRow(_lbl(QCoreApplication.translate('Preferences', 'Result font:')), font_row)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -798,14 +814,14 @@ class PreferencesWindow(QWidget):
         v.setContentsMargins(12, 8, 12, 8)
         v.setSpacing(6)
 
-        lbl_title = QLabel("Vista previa")
+        lbl_title = QLabel(QCoreApplication.translate('Preferences', 'Preview'))
         lbl_title.setStyleSheet("color: #888888; font-size: 14px;")
 
         self._preview_frame = QFrame()
         self._preview_frame.setFrameShape(QFrame.Box)
         self._preview_frame.setFixedHeight(44)
 
-        self._preview_label = QLabel("Texto traducido de ejemplo — Translation Preview")
+        self._preview_label = QLabel(QCoreApplication.translate('Preferences', 'Translation Preview'))
         self._preview_label.setAlignment(Qt.AlignCenter)
 
         inner = QVBoxLayout(self._preview_frame)
@@ -868,7 +884,7 @@ class PreferencesWindow(QWidget):
     # ------------------------------------------------------
     def _pick_color(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Color de selección")
+        dlg.setWindowTitle(QCoreApplication.translate('Preferences', 'Selection Color'))
         dlg.setStyleSheet("background-color: #2a2a2a; color: #ffffff;")
 
         layout = QVBoxLayout(dlg)
@@ -945,8 +961,8 @@ class PreferencesWindow(QWidget):
         picker.currentColorChanged.connect(on_color_changed)
         QTimer.singleShot(50, lambda: user_interacted.__setitem__(0, True))
 
-        btn_ok = QPushButton("Aceptar")
-        btn_cancel = QPushButton("Cancelar")
+        btn_ok = QPushButton(QCoreApplication.translate('Preferences', 'Accept'))
+        btn_cancel = QPushButton(QCoreApplication.translate('Preferences', 'Cancel'))
         btn_ok.setStyleSheet(_STYLE_BTN_SAVE)
         btn_cancel.setStyleSheet(_STYLE_BTN_CANCEL)
         btn_ok.setCursor(Qt.PointingHandCursor)
