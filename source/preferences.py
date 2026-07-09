@@ -1,19 +1,18 @@
-# preferences.py
 # OCR Translator
 # Copyright (C) 2026 ZProjects
 #
 # This file is part of OCR Translator.
 # OCR Translator is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
+# it under the terms of the GNU Affero General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
 # OCR Translator is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
+# GNU Affero General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License
+# You should have received a copy of the GNU Affero General Public License
 # along with OCR Translator. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
@@ -31,7 +30,9 @@ from config import (
     CAPTURE_SECONDARY_2,
     SELECTION_COLOR,      
     RESULT_FONT_FAMILY,   
-    SELECTION_BORDER_WIDTH,     
+    SELECTION_BORDER_WIDTH,  
+    OCR_RESTART_ENABLED,
+    OCR_RESTART_CHAR_THRESHOLD,   
 )
 
 # ==========================================================
@@ -90,6 +91,26 @@ def set_translation_cache_enabled(enabled: bool) -> None:
     s = _settings()
     s.setValue("translation/cache_enabled", bool(enabled))
 # (Dependencias/Interacciones: Llamado por 'translator.py' en tiempo real y por 'preferences_window.py' al guardar.)
+
+
+# ==========================================================
+# BLOQUE: Preferencias de OCR
+# ==========================================================
+def get_ocr_restart_enabled() -> bool:
+    s = _settings()
+    return s.value("ocr/restart_enabled", OCR_RESTART_ENABLED, type=bool)
+
+def set_ocr_restart_enabled(value: bool) -> None:
+    s = _settings()
+    s.setValue("ocr/restart_enabled", value)
+
+def get_ocr_restart_char_threshold() -> int:
+    s = _settings()
+    return s.value("ocr/restart_char_threshold", OCR_RESTART_CHAR_THRESHOLD, type=int)
+
+def set_ocr_restart_char_threshold(value: int) -> None:
+    s = _settings()
+    s.setValue("ocr/restart_char_threshold", value)
 
 
 # ==========================================================
@@ -163,22 +184,3 @@ def get_selection_border_width() -> int:
 def set_selection_border_width(width: int) -> None:
     _settings().setValue("appearance/border_width", int(width))
 # (Dependencias/Interacciones: Llamado por 'selection_window.py' para dibujar el área y por 'loading_window.py' para renderizar el texto traducido.)
-
-
-# ==========================================================
-# BLOQUE: Control de Modelos OCR Descargados
-# ==========================================================
-def get_downloaded_langs() -> list[str]:
-    s = _settings()
-    value = s.value("ocr/downloaded_langs", "")
-    if not value:
-        return []
-    return [lang.strip() for lang in value.split(",") if lang.strip()]
-
-def add_downloaded_lang(lang: str) -> None:
-    s = _settings()
-    langs = get_downloaded_langs()
-    if lang not in langs:
-        langs.append(lang)
-        s.setValue("ocr/downloaded_langs", ",".join(langs))
-# (Dependencias/Interacciones: Llamado exclusivamente por 'ocr_engine.py' para saber si un idioma requiere descarga o ya está disponible localmente.)
