@@ -86,7 +86,7 @@ class ZoomableImageLabel(QWidget):
                     painter.setFont(font)
                     rect = QRectF(ov['x'], ov['y'], ov['w'], ov['h'])
                     painter.setPen(QPen(ov['color']))
-                    painter.drawText(rect, Qt.AlignVCenter | Qt.AlignLeft, ov['text'])
+                    painter.drawText(rect, Qt.AlignVCenter | Qt.AlignLeft | Qt.TextDontClip, ov['text'])
         painter.end()
 
 
@@ -382,20 +382,6 @@ class UnifiedResultWindow:
         avg = np.mean(pixels, axis=0).astype(int)
         del region, gray, mask, pixels
 
-        # --- Boost de saturación y brillo en HSV ---
-        color = QColor(int(avg[0]), int(avg[1]), int(avg[2]))
-        h, s, v, a = color.getHsv()
-        if s < 40:
-            if median_brightness < 128:
-                v = min(255, int(v * 1.4) + 80)
-                s = min(255, int(s * 2.0) + 30)
-            else:
-                v = max(0, int(v * 0.7) - 30)
-                s = min(255, int(s * 2.0) + 30)
-        else:
-            s = min(255, int(s * 1.5) + 30)
-            v = min(255, int(v * 1.2) + 25)
-        color.setHsv(h, s, v, a)
         # --- Boost de saturación y brillo en HSV ---
         color = QColor(int(avg[0]), int(avg[1]), int(avg[2]))
         h, s, v, a = color.getHsv()
