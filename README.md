@@ -5,7 +5,7 @@
 Capture text from any area of your screen and translate it instantly.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](./LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11-yellow.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9.13-yellow.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078d7.svg)](https://www.microsoft.com/windows)
 [![AI Assisted](https://img.shields.io/badge/Built%20with-AI%20assistance-8a2be2.svg)](#)
 
