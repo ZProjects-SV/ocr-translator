@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel,
-    QProgressBar, QApplication, QHBoxLayout, QPushButton, QStyle
+    QProgressBar, QApplication, QHBoxLayout, QPushButton, QStyle, QToolTip
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRectF, QPointF, QCoreApplication
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage, QFontMetrics
@@ -149,6 +149,7 @@ class _ResultWidget(QWidget):
 
 
     def closeEvent(self, event):
+        QToolTip.hideText()
         if self._owner is not None:
             self._owner._hard_destroy()
             self._owner = None
@@ -307,6 +308,7 @@ class UnifiedResultWindow:
     def close(self):
         if self.is_closed or not self.window:
             return
+        QToolTip.hideText()
         try:
             self.window.close()
         except Exception:
