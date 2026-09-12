@@ -34,13 +34,13 @@ TRANSLATION_CACHE_ENABLED = True
 
 TRANSLATION_LANG_CHOICES = [
     "en", "es", "pt", "fr",
-    "de", "it", "ja", "ko", "zh-cn",
+    "de", "it", "ja", "ko", "zh-CN",
 ]
 
 TRANSLATION_TO_PADDLE_LANG = {
     "en": "en", "es": "es", "pt": "en",
     "fr": "en", "de": "en", "it": "en",
-    "ja": "japan", "ko": "korean", "zh-cn": "ch",
+    "ja": "japan", "ko": "korean", "zh-CN": "ch",
 }
 
 # Nombres completos para mostrar en la UI
@@ -53,7 +53,7 @@ TRANSLATION_LANG_DISPLAY = {
     "it":    "Italiano",
     "ja":    "日本語",
     "ko":    "한국어",
-    "zh-cn": "中文 (简体)",
+    "zh-CN": "中文 (简体)",
 }
 
 PADDLE_LANG = "en"
