@@ -78,6 +78,7 @@ class _SelectionWindow(QWidget):
         self._toast = None
         self._toast_anim = None
         self._loop: QEventLoop | None = None
+        self._scale = 1.0
 
         self._result = None  # (x1, y1, x2, y2, cropped_pil)
 
@@ -173,6 +174,10 @@ class _SelectionWindow(QWidget):
 
         screen = QApplication.primaryScreen()
         self._pixmap = screen.grabWindow(0)
+
+        geo = screen.geometry()
+        if geo.width() > 0:
+            self._scale = self._pixmap.width() / geo.width()
 
         q_img = self._pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
 
@@ -345,8 +350,12 @@ class _SelectionWindow(QWidget):
         new_x2 = x2 + 6
         new_y2 = y2 + 6
 
-        cropped = self._screenshot.crop((new_x1, new_y1, new_x2, new_y2))
-
+        s = self._scale
+        cropped = self._screenshot.crop((
+            int(new_x1 * s), int(new_y1 * s),
+            int(new_x2 * s), int(new_y2 * s),
+        ))
+        
         self._result = (new_x1, new_y1, new_x2, new_y2, cropped)
 
         self._finish()

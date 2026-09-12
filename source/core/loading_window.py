@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRectF, QPointF, QCoreApplication
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage, QFontMetrics
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageEnhance
 import numpy as np
 import gc
 
@@ -200,7 +200,7 @@ class UnifiedResultWindow:
         else:
             limit_w = 1152.0
             limit_h = 540.0
-        scale = min(2.5, limit_w / img_w, limit_h / img_h)
+        scale = min(2.8, limit_w / img_w, limit_h / img_h)
         return max(1, int(img_w * scale)), max(1, int(img_h * scale))
 
     # ==========================================================
@@ -400,37 +400,65 @@ class UnifiedResultWindow:
         y1 = max(0, min(by1, by2)); y2 = min(img_h, max(by1, by2))
         if x2 <= x1 or y2 <= y1:
             return QColor(255, 255, 255)
-        region = img_array[y1:y2, x1:x2]
-        gray = np.mean(region, axis=2)
-        median_brightness = np.median(gray)
-        if median_brightness < 128:
-            threshold = np.percentile(gray, 85)
-            mask = gray >= threshold
-        else:
-            threshold = np.percentile(gray, 15)
-            mask = gray <= threshold
-        pixels = region[mask]
-        if len(pixels) == 0:
-            pixels = region.reshape(-1, 3)
-        avg = np.mean(pixels, axis=0).astype(int)
-        del region, gray, mask, pixels
 
-        # --- Boost de saturación y brillo en HSV ---
-        color = QColor(int(avg[0]), int(avg[1]), int(avg[2]))
-        h, s, v, a = color.getHsv()
-        if s < 40:
-            if median_brightness < 128:
-                v = min(255, int(v * 1.4) + 80)
-                s = min(255, int(s * 2.0) + 30)
-            else:
-                v = max(0, int(v * 0.7) - 30)
-                s = min(255, int(s * 2.0) + 30)
-        else:
-            s = min(255, int(s * 1.5) + 30)
-            v = min(255, int(v * 1.2) + 25)
-        color.setHsv(h, s, v, a)
-        del avg
-        return color
+
+        region = img_array[y1:y2, x1:x2].astype(np.int16)
+        flat = region.reshape(-1, 3)
+        # Fondo difuminado aproximado: la media del bloque es a lo que
+        # se parece la zona donde QPainter dibujará el texto.
+        backdrop = flat.mean(axis=0).astype(np.int16)
+        del region
+
+
+        # --- 1) Fondo = color cuantizado más frecuente del bloque ---
+        q = flat >> 4
+        qidx = (q[:, 0] << 8) | (q[:, 1] << 4) | q[:, 2]
+        counts = np.bincount(qidx, minlength=4096)
+        bg_bin = int(np.argmax(counts))
+        bg_color = np.array(
+            [(bg_bin >> 8) & 0xF, (bg_bin >> 4) & 0xF, bg_bin & 0xF],
+            dtype=np.int16,
+        ) * 16 + 8
+        del q, qidx, counts
+
+
+        # --- 2) Texto = píxeles alejados del fondo (distancia RGB > 55) ---
+        diff = flat - bg_color
+        dist2 = (diff * diff).sum(axis=1)
+        mask = dist2 > 3025
+        if int(mask.sum()) < 4:
+            bg_brightness = int(bg_color.sum()) // 3
+            return QColor(255, 255, 255) if bg_brightness < 128 else QColor(0, 0, 0)
+
+
+        # --- 3) Núcleo del texto: solo los píxeles MÁS alejados del fondo.
+        #     Excluye bordes antialias y franjas de subpíxel (ClearType),
+        #     que son mezclas texto-fondo a media distancia. ---
+        max_d2 = int(dist2[mask].max())
+        core = flat[mask & (dist2 >= max_d2 * 0.5)]
+        del diff, dist2, mask, flat
+
+
+        # --- 4) Color fiel: media del grupo dominante del núcleo (moda).
+        #     La moda evita que píxeles mezcla de otro tono tiñan el resultado. ---
+        cq = core >> 4
+        cqidx = (cq[:, 0] << 8) | (cq[:, 1] << 4) | cq[:, 2]
+        ccounts = np.bincount(cqidx, minlength=4096)
+        avg = core[cqidx == int(np.argmax(ccounts))].mean(axis=0)
+        del cq, cqidx, ccounts, core
+
+
+        # --- 5) Contraste garantizado conservando el tono: si el color
+        #     quedó demasiado cerca del fondo difuminado, se aleja en
+        #     SU propia dirección (sin HSV, sin cambiar el matiz). ---
+        vec = avg - backdrop
+        d = float(np.sqrt((vec * vec).sum()))
+        if 0.1 < d < 80.0:
+            avg = backdrop + vec * (80.0 / d)
+        r = int(max(0, min(255, avg[0])))
+        g = int(max(0, min(255, avg[1])))
+        b = int(max(0, min(255, avg[2])))
+        return QColor(r, g, b)
 
 
     @staticmethod
@@ -477,9 +505,17 @@ class UnifiedResultWindow:
         blurred.close()
         del blurred
 
-        pixmap = self._pil_to_pixmap(blurred_resized)
+
+        # Contraste reducido: acerca los colores al gris medio de la imagen,
+        # amortiguando las letras que el desenfoque expande sobre el fondo.
+        flattened = ImageEnhance.Contrast(blurred_resized).enhance(0.55)
         blurred_resized.close()
         del blurred_resized
+
+
+        pixmap = self._pil_to_pixmap(flattened)
+        flattened.close()
+        del flattened
         return pixmap
 
 
