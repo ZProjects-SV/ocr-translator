@@ -162,12 +162,7 @@ class _ResultWidget(QWidget):
 # ==========================================================
 class UnifiedResultWindow:
 
-    def __init__(self, x1, y1, x2, y2, margin=0):
-        self.x1 = x1
-        self.y1 = y1
-        self.x2 = x2
-        self.y2 = y2
-        self.margin = margin
+    def __init__(self):
         self.window: _ResultWidget | None = None
         self.is_closed = False
         self._image: Image.Image | None = None
@@ -182,6 +177,31 @@ class UnifiedResultWindow:
         self._reset_btn: QPushButton | None = None
         self._close_btn: QPushButton | None = None
 
+    # ==========================================================
+    # Helpers de ventana para centrar y dimensionar
+    # ==========================================================
+
+    def _center_window(self):
+        screen = QApplication.primaryScreen()
+        if screen is None or self.window is None:
+            return
+        avail = screen.availableGeometry()
+        geo = self.window.frameGeometry()
+        geo.moveCenter(avail.center())
+        self.window.move(geo.topLeft())
+
+    @staticmethod
+    def _display_size(img_w: int, img_h: int) -> tuple[int, int]:
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            limit_w = avail.width() * 0.9
+            limit_h = avail.height() * 0.75
+        else:
+            limit_w = 1152.0
+            limit_h = 540.0
+        scale = min(2.5, limit_w / img_w, limit_h / img_h)
+        return max(1, int(img_w * scale)), max(1, int(img_h * scale))
 
     # ==========================================================
     # Destrucción determinista
@@ -256,7 +276,9 @@ class UnifiedResultWindow:
     # API Pública
     # ==========================================================
     def show_loading(self):
-        self.width = min(max(self.x2 - self.x1, 320), 500)
+        screen = QApplication.primaryScreen()
+        screen_w = screen.availableGeometry().width() if screen else 1280
+        self.width = min(max(screen_w // 3, 320), 500)
 
         self.window = _ResultWidget(owner=self)
         self._signals = _Signals(self.window)
@@ -270,7 +292,7 @@ class UnifiedResultWindow:
             self.window.setWindowIcon(app_icon)
 
         self.window.setFixedSize(self.width, 180)
-        self.window.move(self.x1, self.y1)
+        self._center_window()
         self.window.setWindowFlags(Qt.Window)
         self.window.setAttribute(Qt.WA_DeleteOnClose, True)
         self.window.setAttribute(Qt.WA_QuitOnClose, False)
@@ -290,9 +312,16 @@ class UnifiedResultWindow:
 
 
     def show_result(self, translated_text, image=None, blocks=None):
+        if self.is_closed:
+            try:
+                if image is not None:
+                    image.close()
+            except Exception:
+                pass
+            return
         self._image = image
         self._blocks = blocks
-        if self._signals and not self.is_closed:
+        if self._signals:
             self._signals.show_result.emit(translated_text)
 
 
@@ -318,6 +347,7 @@ class UnifiedResultWindow:
     def run(self):
         if self.window and not self.is_closed:
             self.window.show()
+            self._center_window()
 
 
     # ==========================================================
@@ -345,6 +375,7 @@ class UnifiedResultWindow:
         self.window.setStyleSheet("background-color: #1e1e1e;")
         self._show_result_content(translated_text, self._image, self._blocks)
         self.window.setVisible(True)
+        self._center_window()
 
 
     # ==========================================================
@@ -510,15 +541,7 @@ class UnifiedResultWindow:
                 self._zoom_label.setSourcePixmap(self._pixmap_after, self._text_overlays)
         else:
             if self._pixmap_before is None and self._image is not None:
-                img_w, img_h = self._image.size
-                max_w = 800
-                if img_w > max_w:
-                    scale = max_w / img_w
-                    disp_w = max_w
-                    disp_h = int(img_h * scale)
-                else:
-                    disp_w = img_w
-                    disp_h = img_h
+                disp_w, disp_h = self._display_size(*self._image.size)
                 self._pixmap_before = self._build_original_pixmap(self._image, disp_w, disp_h)
             if self._zoom_label:
                 self._zoom_label.setSourcePixmap(self._pixmap_before)
@@ -571,14 +594,7 @@ class UnifiedResultWindow:
     def _show_result_content(self, translated_text, image=None, blocks=None):
         if image and blocks:
             img_w, img_h = image.size
-            max_w = 800
-            if img_w > max_w:
-                scale = max_w / img_w
-                disp_w = max_w
-                disp_h = int(img_h * scale)
-            else:
-                disp_w = img_w
-                disp_h = img_h
+            disp_w, disp_h = self._display_size(img_w, img_h)
 
             app = QApplication.instance()
             fram_margin = 30

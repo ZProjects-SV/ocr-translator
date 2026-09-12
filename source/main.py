@@ -125,7 +125,7 @@ class ProgressCapture:
 
 
 class _Signals(QObject):
-    area_selected = Signal(int, int, int, int, object)
+    area_selected = Signal(object)
     start_capture_s = Signal()
     open_preferences = Signal()
     open_about = Signal()
@@ -362,14 +362,14 @@ class OCRTranslatorApp:
             except Exception:
                 pass
             return
-        self._signals.area_selected.emit(x1, y1, x2, y2, cropped_image)
+        self._signals.area_selected.emit(cropped_image)
 
-    def _run_result_window(self, x1, y1, x2, y2, cropped_image):
+    def _run_result_window(self, cropped_image):
         if self._active_result and not self._active_result.is_closed:
             self._active_result.close()
             self._active_result = None
 
-        result_window = UnifiedResultWindow(x1, y1, x2, y2, margin=1)
+        result_window = UnifiedResultWindow()
         self._active_result = result_window
         result_window.show_loading()
 
@@ -380,6 +380,10 @@ class OCRTranslatorApp:
 
                 if not original_text:
                     result_window.update_status(QCoreApplication.translate('Result', 'No text detected'))
+                    try:
+                        cropped_image.close()
+                    except Exception:
+                        pass
                     result_window.close_after(2000)
                     return
 
