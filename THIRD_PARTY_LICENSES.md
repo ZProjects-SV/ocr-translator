@@ -6,7 +6,6 @@ All copyright notices are reproduced as required by each respective license.
 | Library                 | License                                     | Source                                                                 |
 | ----------------------- | ------------------------------------------- | ---------------------------------------------------------------------- |
 | Cython                  | Apache-2.0                                  | https://github.com/cython/cython/blob/master/LICENSE.txt              |
-| deep-translator         | MIT                                         | https://github.com/nidhaloff/deep-translator/blob/master/LICENSE      |
 | keyboard                | MIT                                         | https://github.com/boppreh/keyboard/blob/master/LICENSE.txt           |
 | NumPy                   | BSD-3-Clause                                | https://numpy.org/doc/stable/license.html                             |
 | PaddleOCR               | Apache-2.0                                  | https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE           |

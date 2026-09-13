@@ -37,3 +37,6 @@ local_config.py
 # Logs
 *.log
 logs/
+
+# tests
+test.py

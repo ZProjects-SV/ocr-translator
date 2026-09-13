@@ -66,7 +66,6 @@ cmd = [
 
     # === Dependencias de tu app ===
     '--hidden-import', 'pystray._win32',
-    '--hidden-import', 'deep_translator',
     '--hidden-import', 'keyboard',
     '--hidden-import', 'pynvml',
     '--hidden-import', 'yaml',
@@ -83,6 +82,8 @@ cmd = [
     '--exclude-module', 'notebook',
     '--exclude-module', 'numpy.testing',
     '--exclude-module', 'numpy.testing._private',
+    
+    '--uac-admin',
 ]
 
 # Metadata dinámica

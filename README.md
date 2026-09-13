@@ -17,11 +17,12 @@ Capture text from any area of your screen and translate it instantly.
 
 OCR Translator is a Windows desktop application that lets you capture any region of the screen, extract text with OCR, and translate it in real time.
 
-It is built with Python, PySide6, PaddleOCR, and deep-translator, with a focus on fast capture, tray-based background use, and practical everyday translation.
+It is built with Python, PySide6, PaddleOCR, with a focus on fast capture, tray-based background use, and practical everyday translation.
 
 ## Before and After
 
-<img width="1375" height="768" alt="beforeandafter" src="https://github.com/user-attachments/assets/81b23641-3bc7-4b16-85eb-854c3ba519e6" />
+<img width="2912" height="1440" alt="Gemini_Generated_Image_kcoz2hkcoz2hkcoz" src="https://github.com/user-attachments/assets/43704510-c8ac-4009-a1d5-69de83b6bd72" />
+<div align="center">
 
 ## Available versions
 
@@ -48,7 +49,6 @@ OCR Translator is built on the following main technologies:
 - PySide6 (Qt for Python)
 - PaddleOCR
 - PaddlePaddle
-- deep-translator
 - Pillow
 - NumPy
 - PyInstaller
