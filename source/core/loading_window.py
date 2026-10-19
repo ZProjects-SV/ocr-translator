@@ -28,8 +28,8 @@ import gc
 
 
 from preferences import get_result_font_family
-
-
+_GRAY_TOL = 14 # si max-min de RGB < esto, el color se fuerza a gris puro
+DEBUG_COLOR = False  # True para depurar la detección de color de texto (genera imágenes y logs)
 
 # ==========================================================
 # Widget de imagen con zoom y drag
@@ -200,7 +200,7 @@ class UnifiedResultWindow:
         else:
             limit_w = 1152.0
             limit_h = 540.0
-        scale = min(2.8, limit_w / img_w, limit_h / img_h)
+        scale = min(1.5, limit_w / img_w, limit_h / img_h)
         return max(1, int(img_w * scale)), max(1, int(img_h * scale))
 
     # ==========================================================
@@ -394,35 +394,34 @@ class UnifiedResultWindow:
     # Helpers de imagen
     # ==========================================================
     @staticmethod
-    def _dominant_text_color_from_array(img_array: np.ndarray, bx1, by1, bx2, by2) -> QColor:
+    def _dominant_text_color_from_array(img_array, bx1, by1, bx2, by2,
+                                         debug_info: list | None = None) -> QColor:
+        import cv2
+
         img_h, img_w = img_array.shape[:2]
         x1 = max(0, min(bx1, bx2)); x2 = min(img_w, max(bx1, bx2))
         y1 = max(0, min(by1, by2)); y2 = min(img_h, max(by1, by2))
         if x2 <= x1 or y2 <= y1:
             return QColor(255, 255, 255)
 
+        region = img_array[y1:y2, x1:x2]
 
-        region = img_array[y1:y2, x1:x2].astype(np.int16)
+        region = region.astype(np.int32)
+        h, w = region.shape[:2]
         flat = region.reshape(-1, 3)
-        # Fondo difuminado aproximado: la media del bloque es a lo que
-        # se parece la zona donde QPainter dibujará el texto.
-        backdrop = flat.mean(axis=0).astype(np.int16)
-        del region
 
-
-        # --- 1) Fondo = color cuantizado más frecuente del bloque ---
+        # --- 1) Fondo = color cuantizado más frecuente (igual que antes) ---
         q = flat >> 4
         qidx = (q[:, 0] << 8) | (q[:, 1] << 4) | q[:, 2]
         counts = np.bincount(qidx, minlength=4096)
         bg_bin = int(np.argmax(counts))
         bg_color = np.array(
             [(bg_bin >> 8) & 0xF, (bg_bin >> 4) & 0xF, bg_bin & 0xF],
-            dtype=np.int16,
+            dtype=np.int32,
         ) * 16 + 8
-        del q, qidx, counts
+        backdrop = flat.mean(axis=0).astype(np.int32)
 
-
-        # --- 2) Texto = píxeles alejados del fondo (distancia RGB > 55) ---
+        # --- 2) Texto = píxeles alejados del fondo (igual que antes) ---
         diff = flat - bg_color
         dist2 = (diff * diff).sum(axis=1)
         mask = dist2 > 3025
@@ -430,34 +429,47 @@ class UnifiedResultWindow:
             bg_brightness = int(bg_color.sum()) // 3
             return QColor(255, 255, 255) if bg_brightness < 128 else QColor(0, 0, 0)
 
+        # Candidatos: todos los píxeles suficientemente distintos del fondo.
+        # El siguiente paso separará los claros de los oscuros.
+        core = flat[mask]
+        core_px = int(core.shape[0])
 
-        # --- 3) Núcleo del texto: solo los píxeles MÁS alejados del fondo.
-        #     Excluye bordes antialias y franjas de subpíxel (ClearType),
-        #     que son mezclas texto-fondo a media distancia. ---
-        max_d2 = int(dist2[mask].max())
-        core = flat[mask & (dist2 >= max_d2 * 0.5)]
-        del diff, dist2, mask, flat
+        # --- 4) NUEVO: selección por luminancia. Fondo oscuro -> el texto
+        #     son los píxeles MÁS claros del núcleo (y al revés). ---
+        lum_w = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+        lum = core @ lum_w
+        bg_lum = float(bg_color.astype(np.float32) @ lum_w)
+        if bg_lum < 128:
+            chosen = core[lum >= np.percentile(lum, 75)]
+        else:
+            chosen = core[lum <= np.percentile(lum, 25)]
+        avg = chosen.mean(axis=0)
 
+        # Guardar el color seleccionado ANTES de neutralizar tintes pequeños.
+        raw_avg = tuple(int(v) for v in avg)
 
-        # --- 4) Color fiel: media del grupo dominante del núcleo (moda).
-        #     La moda evita que píxeles mezcla de otro tono tiñan el resultado. ---
-        cq = core >> 4
-        cqidx = (cq[:, 0] << 8) | (cq[:, 1] << 4) | cq[:, 2]
-        ccounts = np.bincount(cqidx, minlength=4096)
-        avg = core[cqidx == int(np.argmax(ccounts))].mean(axis=0)
-        del cq, cqidx, ccounts, core
+        is_gray = float(avg.max() - avg.min()) < _GRAY_TOL
+        if is_gray:
+            avg = np.full(3, float(avg.mean()), dtype=np.float32)
 
+        # Sin boost de contraste: conservar el color detectado.
 
-        # --- 5) Contraste garantizado conservando el tono: si el color
-        #     quedó demasiado cerca del fondo difuminado, se aleja en
-        #     SU propia dirección (sin HSV, sin cambiar el matiz). ---
-        vec = avg - backdrop
-        d = float(np.sqrt((vec * vec).sum()))
-        if 0.1 < d < 80.0:
-            avg = backdrop + vec * (80.0 / d)
         r = int(max(0, min(255, avg[0])))
         g = int(max(0, min(255, avg[1])))
         b = int(max(0, min(255, avg[2])))
+
+        if debug_info is not None:
+            debug_info.append({
+                "bg": tuple(int(v) for v in bg_color),
+                "mask_px": int(mask.sum()),
+                "core_px": core_px,
+                "raw_avg": raw_avg,
+                "gray": is_gray,
+                "final": (r, g, b),
+                "chosen_px": int(chosen.shape[0]),
+                "lum_min": round(float(lum.min()), 1),
+                "lum_max": round(float(lum.max()), 1),
+            })
         return QColor(r, g, b)
 
 
@@ -526,6 +538,7 @@ class UnifiedResultWindow:
         del rgb_image
 
         overlays = []
+        debug_infos = [] if DEBUG_COLOR else None
         line_idx = 0
         for block in blocks:
             if line_idx >= len(translated_lines):
@@ -534,7 +547,9 @@ class UnifiedResultWindow:
             rx1 = int(bx1 * scale_factor); ry1 = int(by1 * scale_factor)
             rx2 = int(bx2 * scale_factor); ry2 = int(by2 * scale_factor)
 
-            text_color = self._dominant_text_color_from_array(img_array, bx1, by1, bx2, by2)
+            text_color = self._dominant_text_color_from_array(
+                img_array, bx1, by1, bx2, by2, debug_info=debug_infos
+            )
             box_w = rx2 - rx1; box_h = ry2 - ry1
             text = translated_lines[line_idx]
             line_idx += 1
@@ -563,9 +578,48 @@ class UnifiedResultWindow:
                 'font_size': font_size,
             })
 
+        if DEBUG_COLOR:
+            self._debug_color_detection(img_array, blocks, overlays, debug_infos)
         del img_array
         return overlays
 
+    @staticmethod
+    def _debug_color_detection(img_array, blocks, overlays, infos):
+        import os
+        import time
+        from PIL import Image as PILImage, ImageDraw
+
+        debug_dir = os.path.join("debug_ocr", "color_debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        ts = int(time.time() * 1000)
+
+        canvas = PILImage.fromarray(img_array).convert("RGB")
+        draw = ImageDraw.Draw(canvas)
+
+        print("=" * 72)
+        print(f"[COLOR DEBUG] {len(overlays)} bloques")
+        for i, (blk, ov) in enumerate(zip(blocks, overlays)):
+            info = infos[i] if i < len(infos) else {}
+            bx1, by1, bx2, by2 = blk["box"]
+            x1 = max(0, min(bx1, bx2)); x2 = min(img_array.shape[1], max(bx1, bx2))
+            y1 = max(0, min(by1, by2)); y2 = min(img_array.shape[0], max(by1, by2))
+            draw.rectangle([x1, y1, x2, y2], outline=(255, 0, 255), width=1)
+            draw.rectangle([x2 + 2, y1, x2 + 14, y1 + 12],
+                           fill=ov["color"].getRgb()[:3])
+            draw.text((x1, max(0, y1 - 10)), f"#{i}", fill=(0, 255, 0))
+            print(
+                f"[#{i:02d}] {blk['text'][:28]!r:32} "
+                f"bg={info.get('bg')} raw={info.get('raw_avg')} "
+                f"final={info.get('final')} "
+                f"mask_px={info.get('mask_px')} "
+                f"chosen_px={info.get('chosen_px')} "
+                f"lum={info.get('lum_min')}..{info.get('lum_max')}"
+            )
+        print("=" * 72)
+
+        ruta = os.path.join(debug_dir, f"{ts}_colors.png")
+        canvas.save(ruta, "PNG")
+        print(f"[COLOR DEBUG] imagen: {ruta}")
 
     # ==========================================================
     # Toggle antes/después
