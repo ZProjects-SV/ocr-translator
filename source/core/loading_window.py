@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRectF, QPointF, QCoreApplication
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QFont as QF, QPen, QWheelEvent, QMouseEvent, QImage, QFontMetrics
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image
 import numpy as np
 import gc
 
@@ -493,43 +493,136 @@ class UnifiedResultWindow:
         del resized
         return px
 
+    def _build_inpainted_background(
+        self,
+        image: Image.Image,
+        blocks,
+        disp_w: int,
+        disp_h: int,
+    ) -> QPixmap:
+        import math
 
-    def _build_blurred_background(self, image, blocks, disp_w, disp_h):
-        img_w, img_h = image.size
+        # Margen que también se cubrirá alrededor del bloque OCR.
+        erase_padding = 4
 
-        blurred = image.copy()
+        # Zona donde buscar muestras del fondo.
+        sample_padding = 14
+
+        rgb_image = image.convert("RGB")
+        try:
+            source = np.array(rgb_image)
+        finally:
+            rgb_image.close()
+
+        img_h, img_w = source.shape[:2]
+        result = source.copy()
+
+        # Todas las zonas de texto se excluyen al buscar fondo.
+        excluded = np.zeros((img_h, img_w), dtype=bool)
+        rectangles = []
+
         for block in blocks:
             bx1, by1, bx2, by2 = block["box"]
-            x1 = min(bx1, bx2); x2 = max(bx1, bx2)
-            y1 = min(by1, by2); y2 = max(by1, by2)
-            pad = 3
-            cx1 = max(0, x1 - pad); cy1 = max(0, y1 - pad)
-            cx2 = min(img_w, x2 + pad); cy2 = min(img_h, y2 + pad)
-            if cx2 <= cx1 or cy2 <= cy1:
+
+            x1 = max(
+                0,
+                min(
+                    img_w,
+                    math.floor(min(bx1, bx2)) - erase_padding,
+                ),
+            )
+            y1 = max(
+                0,
+                min(
+                    img_h,
+                    math.floor(min(by1, by2)) - erase_padding,
+                ),
+            )
+            x2 = max(
+                0,
+                min(
+                    img_w,
+                    math.ceil(max(bx1, bx2)) + erase_padding,
+                ),
+            )
+            y2 = max(
+                0,
+                min(
+                    img_h,
+                    math.ceil(max(by1, by2)) + erase_padding,
+                ),
+            )
+
+            if x2 <= x1 or y2 <= y1:
                 continue
-            region = image.crop((cx1, cy1, cx2, cy2))
-            region = region.filter(ImageFilter.GaussianBlur(radius=6))
-            blurred.paste(region, (cx1, cy1))
-            region.close()
-            del region
 
-        blurred_resized = blurred.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-        blurred.close()
-        del blurred
+            rectangles.append((x1, y1, x2, y2))
+            excluded[y1:y2, x1:x2] = True
 
+        for x1, y1, x2, y2 in rectangles:
+            samples = None
 
-        # Contraste reducido: acerca los colores al gris medio de la imagen,
-        # amortiguando las letras que el desenfoque expande sobre el fondo.
-        flattened = ImageEnhance.Contrast(blurred_resized).enhance(0.55)
-        blurred_resized.close()
-        del blurred_resized
+            # Ampliar la búsqueda si no hay fondo disponible cerca.
+            for margin in (
+                sample_padding,
+                sample_padding * 2,
+                sample_padding * 4,
+            ):
+                sx1 = max(0, x1 - margin)
+                sy1 = max(0, y1 - margin)
+                sx2 = min(img_w, x2 + margin)
+                sy2 = min(img_h, y2 + margin)
 
+                crop = source[sy1:sy2, sx1:sx2]
+                valid = ~excluded[sy1:sy2, sx1:sx2]
 
-        pixmap = self._pil_to_pixmap(flattened)
-        flattened.close()
-        del flattened
-        return pixmap
+                samples = crop[valid]
 
+                if len(samples) >= 32:
+                    break
+
+            if samples is None or len(samples) == 0:
+                # Caso excepcional: toda la zona disponible está
+                # marcada como texto. Estimación menos fiable.
+                samples = source[y1:y2, x1:x2].reshape(-1, 3)
+
+            # Agrupar colores parecidos en celdas de 16 niveles.
+            quantized = samples.astype(np.int32) >> 4
+
+            color_ids = (
+                (quantized[:, 0] << 8)
+                | (quantized[:, 1] << 4)
+                | quantized[:, 2]
+            )
+
+            counts = np.bincount(color_ids, minlength=4096)
+            dominant_id = int(counts.argmax())
+
+            # Usar un color real del grupo dominante, no el
+            # promedio de todo el entorno.
+            dominant_samples = samples[color_ids == dominant_id]
+
+            background_color = np.median(
+                dominant_samples,
+                axis=0,
+            ).astype(np.uint8)
+
+            # Cubrir por completo: sin transparencia ni desenfoque.
+            result[y1:y2, x1:x2] = background_color
+
+        cleaned_image = Image.fromarray(result)
+
+        try:
+            resized = cleaned_image.resize(
+                (disp_w, disp_h),
+                Image.Resampling.LANCZOS,
+            )
+            try:
+                return self._pil_to_pixmap(resized)
+            finally:
+                resized.close()
+        finally:
+            cleaned_image.close()
 
     def _build_text_overlays(self, image, blocks, translated_lines, scale_factor):
         rgb_image = image.convert("RGB")
@@ -708,7 +801,7 @@ class UnifiedResultWindow:
             scale_factor = disp_w / img_w
             translated_lines = [l for l in translated_text.split('\n') if l.strip()]
 
-            self._pixmap_after = self._build_blurred_background(
+            self._pixmap_after = self._build_inpainted_background(
                 image, blocks, disp_w, disp_h
             )
             self._text_overlays = self._build_text_overlays(
